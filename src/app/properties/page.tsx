@@ -1,37 +1,72 @@
 import { Suspense } from "react";
-import { prisma } from "@/lib/prisma";
+import { findProperties, countProperties } from "@/lib/queries/property";
+import { PropertyWhereInput } from "@/types";
 import PropertyCard from "@/components/property/PropertyCard";
 import PropertyFilters from "@/components/property/PropertyFilters";
 import { Building2, ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import type { Metadata } from "next";
+import { Prisma } from "@prisma/client";
+
+const PROPERTY_TYPES = ["HOUSE", "APARTMENT", "LAND", "COMMERCIAL", "FARM"] as const;
+const PROPERTY_PURPOSES = ["SALE", "RENT"] as const;
 
 export const metadata: Metadata = {
   title: "Imóveis",
   description: "Explore nossa seleção de casas, apartamentos e terrenos disponíveis nas melhores localizações.",
+  alternates: { canonical: "/properties" },
+  openGraph: {
+    title: "Imóveis disponíveis",
+    description: "Explore nossa seleção de casas, apartamentos e terrenos disponíveis.",
+    url: "/properties",
+  },
 };
 
 interface PropertiesPageProps {
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }
 
+function getScalarParam(value: string | string[] | undefined, maxLength: number) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= maxLength ? normalized : undefined;
+}
+
+function getPriceParam(value: string | string[] | undefined) {
+  const rawValue = getScalarParam(value, 20);
+  if (!rawValue) return undefined;
+  const parsedValue = Number(rawValue);
+  return Number.isFinite(parsedValue) && parsedValue >= 0 && parsedValue <= 1_000_000_000
+    ? parsedValue
+    : undefined;
+}
+
 async function PropertyList({ searchParams }: { searchParams: Record<string, string | string[] | undefined> }) {
-  const page = parseInt((searchParams.page as string) || "1");
+  const parsedPage = Number(getScalarParam(searchParams.page, 5));
+  const page = Number.isInteger(parsedPage) && parsedPage >= 1 && parsedPage <= 10_000
+    ? parsedPage
+    : 1;
   const limit = 12;
-  const type = searchParams.type as string | undefined;
-  const purpose = searchParams.purpose as string | undefined;
-  const city = searchParams.city as string | undefined;
-  const search = searchParams.search as string | undefined;
-  const minPrice = searchParams.minPrice as string | undefined;
-  const maxPrice = searchParams.maxPrice as string | undefined;
+  const rawType = getScalarParam(searchParams.type, 20);
+  const rawPurpose = getScalarParam(searchParams.purpose, 20);
+  const type = PROPERTY_TYPES.includes(rawType as (typeof PROPERTY_TYPES)[number])
+    ? rawType
+    : undefined;
+  const purpose = PROPERTY_PURPOSES.includes(rawPurpose as (typeof PROPERTY_PURPOSES)[number])
+    ? rawPurpose
+    : undefined;
+  const city = getScalarParam(searchParams.city, 100);
+  const search = getScalarParam(searchParams.search, 200);
+  const minPrice = getPriceParam(searchParams.minPrice);
+  const maxPrice = getPriceParam(searchParams.maxPrice);
 
-  // Build Prisma where clause
-  const where: Record<string, unknown> = { active: true };
+  // Build Prisma where clause using strongly typed input
+  const where: PropertyWhereInput = { active: true };
 
-  if (type && type !== "ALL") {
+  if (type) {
     where.type = type;
   }
-  if (purpose && purpose !== "ALL") {
+  if (purpose) {
     where.purpose = purpose;
   }
   if (city) {
@@ -45,35 +80,42 @@ async function PropertyList({ searchParams }: { searchParams: Record<string, str
       { neighborhood: { contains: search } },
     ];
   }
-  if (minPrice) {
-    where.price = { ...(where.price as object || {}), gte: parseFloat(minPrice) };
-  }
-  if (maxPrice) {
-    where.price = { ...(where.price as object || {}), lte: parseFloat(maxPrice) };
+  if (minPrice !== undefined || maxPrice !== undefined) {
+    const priceFilter: Prisma.FloatFilter = {};
+    if (minPrice !== undefined) priceFilter.gte = minPrice;
+    if (maxPrice !== undefined) priceFilter.lte = maxPrice;
+    where.price = priceFilter;
   }
 
+  const skip = (page - 1) * limit;
+
   const [properties, total] = await Promise.all([
-    prisma.property.findMany({
-      where,
-      include: { images: { orderBy: { order: "asc" } } },
-      orderBy: [{ featured: "desc" }, { createdAt: "desc" }],
-      skip: (page - 1) * limit,
-      take: limit,
-    }),
-    prisma.property.count({ where }),
+    findProperties(where, skip, limit),
+    countProperties(where),
   ]);
 
   const totalPages = Math.ceil(total / limit);
+  const visiblePages = [...new Set([
+    1,
+    totalPages,
+    page - 2,
+    page - 1,
+    page,
+    page + 1,
+    page + 2,
+  ])]
+    .filter((candidate) => candidate >= 1 && candidate <= totalPages)
+    .sort((left, right) => left - right);
 
   // Build pagination URL params
   function pageUrl(p: number) {
     const params = new URLSearchParams();
     if (search) params.set("search", search);
-    if (type && type !== "ALL") params.set("type", type);
-    if (purpose && purpose !== "ALL") params.set("purpose", purpose);
+    if (type) params.set("type", type);
+    if (purpose) params.set("purpose", purpose);
     if (city) params.set("city", city);
-    if (minPrice) params.set("minPrice", minPrice);
-    if (maxPrice) params.set("maxPrice", maxPrice);
+    if (minPrice !== undefined) params.set("minPrice", minPrice.toString());
+    if (maxPrice !== undefined) params.set("maxPrice", maxPrice.toString());
     params.set("page", p.toString());
     return `/properties?${params.toString()}`;
   }
@@ -111,33 +153,34 @@ async function PropertyList({ searchParams }: { searchParams: Record<string, str
       {/* Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 sm:gap-8">
         {properties.map((property) => (
-          <PropertyCard key={property.id} property={property} />
+          <PropertyCard key={property.id} property={{ ...property, price: property.price.toString() }} />
         ))}
       </div>
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="mt-12 flex items-center justify-center gap-2">
+        <nav className="mt-12 flex items-center justify-center gap-2" aria-label="Paginação de imóveis">
           {page > 1 && (
             <Link
               href={pageUrl(page - 1)}
+              rel="prev"
               className="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:bg-gray-100 dark:hover:bg-gray-800"
               style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
             >
-              <ChevronLeft className="w-4 h-4" />
+              <ChevronLeft className="w-4 h-4" aria-hidden="true" />
               Anterior
             </Link>
           )}
 
-          {Array.from({ length: totalPages }, (_, i) => i + 1)
-            .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
-            .map((p, idx, arr) => (
+          {visiblePages.map((p, idx, arr) => (
               <span key={p}>
                 {idx > 0 && arr[idx - 1] !== p - 1 && (
-                  <span className="px-2" style={{ color: "var(--text-muted)" }}>...</span>
+                  <span className="px-2" style={{ color: "var(--text-muted)" }} aria-hidden="true">...</span>
                 )}
                 <Link
                   href={pageUrl(p)}
+                  aria-label={`Página ${p}`}
+                  aria-current={p === page ? "page" : undefined}
                   className={`inline-flex items-center justify-center w-10 h-10 rounded-lg text-sm font-medium transition-all ${
                     p === page
                       ? "text-white"
@@ -153,14 +196,15 @@ async function PropertyList({ searchParams }: { searchParams: Record<string, str
           {page < totalPages && (
             <Link
               href={pageUrl(page + 1)}
+              rel="next"
               className="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:bg-gray-100 dark:hover:bg-gray-800"
               style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
             >
               Próximo
-              <ChevronRight className="w-4 h-4" />
+              <ChevronRight className="w-4 h-4" aria-hidden="true" />
             </Link>
           )}
-        </div>
+        </nav>
       )}
     </>
   );

@@ -1,7 +1,11 @@
 import Link from "next/link";
-import { Building2, Mail, Phone, MapPin } from "lucide-react";
+import { Building2, Phone } from "lucide-react";
+import { env } from "@/lib/env";
+import { formatWhatsAppPhone, getWhatsAppLink } from "@/lib/utils";
 
 export default function Footer() {
+  const whatsappLink = getWhatsAppLink("os imóveis disponíveis", env.WHATSAPP_PHONE);
+
   return (
     <footer style={{ background: "var(--bg-secondary)", borderTop: "1px solid var(--border)" }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16">
@@ -79,17 +83,17 @@ export default function Footer() {
               Contato
             </h3>
             <ul className="space-y-3">
-              <li className="flex items-center gap-2.5 text-sm" style={{ color: "var(--text-muted)" }}>
-                <Phone className="w-4 h-4 shrink-0" style={{ color: "var(--brand-icon)" }} />
-                (11) 99999-9999
-              </li>
-              <li className="flex items-center gap-2.5 text-sm" style={{ color: "var(--text-muted)" }}>
-                <Mail className="w-4 h-4 shrink-0" style={{ color: "var(--brand-icon)" }} />
-                contato@larimoveis.com
-              </li>
-              <li className="flex items-start gap-2.5 text-sm" style={{ color: "var(--text-muted)" }}>
-                <MapPin className="w-4 h-4 shrink-0 mt-0.5" style={{ color: "var(--brand-icon)" }} />
-                São Paulo, SP — Brasil
+              <li>
+                <a
+                  href={whatsappLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2.5 text-sm transition-colors hover:text-primary-900 dark:hover:text-primary-200"
+                  style={{ color: "var(--text-muted)" }}
+                >
+                  <Phone className="w-4 h-4 shrink-0" style={{ color: "var(--brand-icon)" }} />
+                  {formatWhatsAppPhone(env.WHATSAPP_PHONE)}
+                </a>
               </li>
             </ul>
           </div>

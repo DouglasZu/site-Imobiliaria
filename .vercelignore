@@ -1,0 +1,16 @@
+# Local environment and database files must never enter a deployment bundle.
+.env
+.env.*
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Local build/test artifacts.
+.next
+node_modules
+coverage
+test-results
+*.log

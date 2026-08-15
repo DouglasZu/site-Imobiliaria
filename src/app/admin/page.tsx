@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { formatPrice, propertyTypeLabels } from "@/lib/utils";
+import { isAllowedPropertyImageUrl } from "@/lib/image-policy";
 import {
   PlusCircle,
   Pencil,
@@ -21,7 +21,7 @@ import {
 interface Property {
   id: string;
   title: string;
-  price: number;
+  price: number | string;
   city: string;
   neighborhood: string;
   type: string;
@@ -32,53 +32,145 @@ interface Property {
   createdAt: string;
 }
 
+type PendingAction = "toggle" | "delete";
+
+async function getResponseError(response: Response, fallback: string) {
+  const payload: unknown = await response.json().catch(() => null);
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "error" in payload &&
+    typeof payload.error === "string"
+  ) {
+    return payload.error;
+  }
+  return fallback;
+}
+
+function getMainImageUrl(property: Property) {
+  return property.images.find((image) => isAllowedPropertyImageUrl(image.url))?.url;
+}
+
 export default function AdminDashboard() {
-  const router = useRouter();
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [pendingActions, setPendingActions] = useState<Record<string, PendingAction>>({});
+  const pendingIds = useRef(new Set<string>());
+
+  function setPendingAction(id: string, action?: PendingAction) {
+    setPendingActions((previous) => {
+      const next = { ...previous };
+      if (action) next[id] = action;
+      else delete next[id];
+      return next;
+    });
+  }
 
   async function fetchProperties() {
+    setLoading(true);
+    setError("");
     try {
-      const res = await fetch("/api/properties?active=all&limit=100");
-      const data = await res.json();
-      setProperties(data.properties || []);
-    } catch {
-      console.error("Error fetching properties");
+      const loadedProperties: Property[] = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const res = await fetch(`/api/properties?active=all&limit=50&page=${page}`);
+        if (!res.ok) {
+          throw new Error(await getResponseError(res, "Não foi possível carregar os imóveis."));
+        }
+
+        const data: unknown = await res.json();
+        if (
+          !data ||
+          typeof data !== "object" ||
+          !("properties" in data) ||
+          !Array.isArray(data.properties) ||
+          !("pagination" in data) ||
+          !data.pagination ||
+          typeof data.pagination !== "object" ||
+          !("totalPages" in data.pagination) ||
+          typeof data.pagination.totalPages !== "number" ||
+          !Number.isInteger(data.pagination.totalPages) ||
+          data.pagination.totalPages < 0 ||
+          data.pagination.totalPages > 10_000
+        ) {
+          throw new Error("A resposta da listagem de imóveis é inválida.");
+        }
+
+        loadedProperties.push(...(data.properties as Property[]));
+        totalPages = data.pagination.totalPages;
+        page += 1;
+      } while (page <= totalPages);
+
+      setProperties(loadedProperties);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Não foi possível carregar os imóveis.");
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
+    // The request is the external synchronization performed by this effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchProperties();
   }, []);
 
   async function deleteProperty(id: string) {
     if (!confirm("Tem certeza que deseja excluir este imóvel?")) return;
-    setDeleting(id);
+    if (pendingIds.current.has(id)) return;
+
+    pendingIds.current.add(id);
+    setPendingAction(id, "delete");
+    setError("");
     try {
-      await fetch(`/api/properties/${id}`, { method: "DELETE" });
+      const response = await fetch(`/api/properties/${id}`, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(await getResponseError(response, "Não foi possível excluir o imóvel."));
+      }
       setProperties((prev) => prev.filter((p) => p.id !== id));
-    } catch {
-      alert("Erro ao excluir imóvel");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Não foi possível excluir o imóvel.");
     } finally {
-      setDeleting(null);
+      pendingIds.current.delete(id);
+      setPendingAction(id);
     }
   }
 
   async function toggleActive(id: string, currentActive: boolean) {
+    if (pendingIds.current.has(id)) return;
+
+    const nextActive = !currentActive;
+    pendingIds.current.add(id);
+    setPendingAction(id, "toggle");
+    setError("");
+    setProperties((previous) =>
+      previous.map((property) =>
+        property.id === id ? { ...property, active: nextActive } : property
+      )
+    );
+
     try {
-      await fetch(`/api/properties/${id}`, {
-        method: "PUT",
+      const response = await fetch(`/api/properties/${id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: !currentActive }),
+        body: JSON.stringify({ active: nextActive }),
       });
-      setProperties((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, active: !currentActive } : p))
+      if (!response.ok) {
+        throw new Error(await getResponseError(response, "Não foi possível atualizar o status."));
+      }
+    } catch (caughtError) {
+      setProperties((previous) =>
+        previous.map((property) =>
+          property.id === id ? { ...property, active: currentActive } : property
+        )
       );
-    } catch {
-      alert("Erro ao atualizar status");
+      setError(caughtError instanceof Error ? caughtError.message : "Não foi possível atualizar o status.");
+    } finally {
+      pendingIds.current.delete(id);
+      setPendingAction(id);
     }
   }
 
@@ -114,6 +206,22 @@ export default function AdminDashboard() {
           Novo Imóvel
         </Link>
       </div>
+
+      {error && (
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 sm:flex-row sm:items-center sm:justify-between dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+        >
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={fetchProperties}
+            className="self-start font-semibold underline underline-offset-4 sm:self-auto"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -200,9 +308,9 @@ export default function AdminDashboard() {
               >
                 {/* Thumbnail */}
                 <div className="relative w-16 h-12 sm:w-20 sm:h-14 rounded-lg overflow-hidden shrink-0" style={{ background: "var(--bg-secondary)" }}>
-                  {property.images[0] ? (
+                  {getMainImageUrl(property) ? (
                     <Image
-                      src={property.images[0].url}
+                      src={getMainImageUrl(property)!}
                       alt={property.title}
                       fill
                       className="object-cover"
@@ -265,11 +373,19 @@ export default function AdminDashboard() {
                 {/* Actions */}
                 <div className="flex items-center gap-2 shrink-0">
                   <button
+                    type="button"
                     onClick={() => toggleActive(property.id, property.active)}
+                    disabled={Boolean(pendingActions[property.id])}
                     className={`btn-action ${property.active ? "btn-action-warning" : "btn-action-success"}`}
-                    aria-label={property.active ? "Desativar" : "Ativar"}
+                    aria-label={`${property.active ? "Desativar" : "Ativar"} ${property.title}`}
+                    aria-busy={pendingActions[property.id] === "toggle"}
                   >
-                    {property.active ? (
+                    {pendingActions[property.id] === "toggle" ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span className="hidden sm:inline">Salvando</span>
+                      </>
+                    ) : property.active ? (
                       <>
                         <EyeOff className="w-3.5 h-3.5" />
                         <span className="hidden sm:inline">Desativar</span>
@@ -284,18 +400,20 @@ export default function AdminDashboard() {
                   <Link
                     href={`/admin/properties/${property.id}/edit`}
                     className="btn-action"
-                    aria-label="Editar"
+                    aria-label={`Editar ${property.title}`}
                   >
                     <Pencil className="w-3.5 h-3.5" />
                     <span className="hidden sm:inline">Editar</span>
                   </Link>
                   <button
+                    type="button"
                     onClick={() => deleteProperty(property.id)}
-                    disabled={deleting === property.id}
+                    disabled={Boolean(pendingActions[property.id])}
                     className="btn-action btn-action-danger"
-                    aria-label="Excluir"
+                    aria-label={`Excluir ${property.title}`}
+                    aria-busy={pendingActions[property.id] === "delete"}
                   >
-                    {deleting === property.id ? (
+                    {pendingActions[property.id] === "delete" ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <Trash2 className="w-3.5 h-3.5" />

@@ -1,88 +1,86 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { comparePassword, signToken, setAuthCookie } from "@/lib/auth";
+import { jsonNoStore, readJsonBody } from "@/lib/http-security";
+import { consumeLoginRateLimit, getClientIp } from "@/lib/rate-limit";
+import { loginSchema } from "@/lib/schemas/auth";
 
-// Simple in-memory rate limiting for login attempts
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
-const MAX_ATTEMPTS = 5;
-const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_LOGIN_BODY_BYTES = 8 * 1_024;
 
-function getClientIp(request: NextRequest): string {
-  return (
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    request.headers.get("x-real-ip") ||
-    "unknown"
-  );
+// A real cost-12 bcrypt hash used only to equalize unknown-account timing.
+const DUMMY_PASSWORD_HASH =
+  "$2b$12$ljYAjR2G5bhBWg9SoeMHIOOKGVm6q5APRVoa29heFo.7kSFR1X.SO";
+
+function logAuthEvent(
+  level: "warn" | "error",
+  event: string,
+  requestId: string,
+  context: Record<string, unknown> = {}
+): void {
+  const entry = JSON.stringify({ level, event, requestId, ...context });
+  if (level === "error") console.error(entry);
+  else console.warn(entry);
 }
 
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const record = loginAttempts.get(ip);
+export async function POST(request: NextRequest): Promise<Response> {
+  const requestId = randomUUID();
 
-  if (!record || now > record.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + WINDOW_MS });
-    return true;
-  }
-
-  if (record.count >= MAX_ATTEMPTS) {
-    return false;
-  }
-
-  record.count++;
-  return true;
-}
-
-export async function POST(request: NextRequest) {
   try {
-    const ip = getClientIp(request);
+    const body = await readJsonBody(request, MAX_LOGIN_BODY_BYTES);
+    if (!body.success) return body.response;
 
-    if (!checkRateLimit(ip)) {
-      return Response.json(
-        { error: "Muitas tentativas. Tente novamente em 15 minutos." },
-        { status: 429 }
+    const result = loginSchema.safeParse(body.data);
+    if (!result.success) {
+      return jsonNoStore({ error: "Requisição inválida" }, { status: 400 });
+    }
+
+    const { email, password } = result.data;
+    const rateLimit = await consumeLoginRateLimit({
+      ip: getClientIp(request),
+      account: email,
+    });
+
+    if (!rateLimit.allowed) {
+      logAuthEvent("warn", "admin_login_rate_limited", requestId, {
+        scopes: rateLimit.violatedScopes,
+      });
+
+      return jsonNoStore(
+        { error: "Muitas tentativas. Tente novamente mais tarde." },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rateLimit.retryAfterSeconds) },
+        }
       );
     }
 
-    const { email, password } = await request.json();
+    const admin = await prisma.admin.findUnique({
+      where: { email },
+      select: { id: true, passwordHash: true },
+    });
 
-    if (!email || !password) {
-      return Response.json(
-        { error: "E-mail e senha são obrigatórios" },
-        { status: 400 }
-      );
+    // Exactly one bcrypt comparison runs for both known and unknown accounts.
+    const passwordMatches = await comparePassword(
+      password,
+      admin?.passwordHash ?? DUMMY_PASSWORD_HASH
+    );
+
+    if (!admin || !passwordMatches) {
+      logAuthEvent("warn", "admin_login_denied", requestId);
+      return jsonNoStore({ error: "Credenciais inválidas" }, { status: 401 });
     }
 
-    const admin = await prisma.admin.findUnique({ where: { email } });
-
-    // Use constant-time comparison to prevent timing attacks
-    // Even if admin is not found, we still hash to keep response time similar
-    if (!admin) {
-      // Perform a dummy hash comparison to prevent timing leaks
-      await comparePassword(password, "$2a$12$000000000000000000000000000000000000000000000000000000");
-      return Response.json(
-        { error: "Credenciais inválidas" },
-        { status: 401 }
-      );
-    }
-
-    const isValid = await comparePassword(password, admin.passwordHash);
-
-    if (!isValid) {
-      return Response.json(
-        { error: "Credenciais inválidas" },
-        { status: 401 }
-      );
-    }
-
-    // Reset rate limit on successful login
-    loginAttempts.delete(ip);
-
-    const token = await signToken({ id: admin.id, email: admin.email });
+    const token = await signToken(admin.id);
     await setAuthCookie(token);
 
-    return Response.json({ success: true });
-  } catch {
-    return Response.json(
+    return jsonNoStore({ success: true });
+  } catch (error) {
+    logAuthEvent("error", "admin_login_failed", requestId, {
+      error: error instanceof Error ? error.name : "UnknownError",
+    });
+
+    return jsonNoStore(
       { error: "Erro interno do servidor" },
       { status: 500 }
     );

@@ -40,9 +40,11 @@ test.describe("Lar Imóveis E2E navigation and filters", () => {
     // Click on Alugar
     await rentTab.click();
     await expect(page).toHaveURL(/purpose=RENT/);
+    await expect(page.locator("body")).not.toContainText("Erro ao buscar imóveis");
 
     // Click on Comprar
     await buyTab.click();
     await expect(page).toHaveURL(/purpose=SALE/);
+    await expect(page.locator("body")).not.toContainText("Erro ao buscar imóveis");
   });
 });

@@ -1,16 +1,15 @@
-"use client";
-
 import Link from "next/link";
 import Image from "next/image";
-import { MapPin, Bed, Bath, Maximize, Heart } from "lucide-react";
+import { MapPin, Bed, Bath, Maximize, Building2 } from "lucide-react";
 import { formatPrice, propertyTypeLabels } from "@/lib/utils";
-import { useState, useEffect } from "react";
+import { isAllowedPropertyImageUrl } from "@/lib/image-policy";
+import FavoriteButton from "@/components/property/FavoriteButton";
 
 interface PropertyCardProps {
   property: {
     id: string;
     title: string;
-    price: number;
+    price: number | string;
     city: string;
     neighborhood: string;
     type: string;
@@ -20,93 +19,79 @@ interface PropertyCardProps {
     area: number | null;
     featured: boolean;
     images: { id: string; url: string }[];
+    _count?: { images: number };
   };
 }
 
 export default function PropertyCard({ property }: PropertyCardProps) {
-  const [isFavorite, setIsFavorite] = useState(false);
-  const mainImage = property.images[0]?.url || "/placeholder-property.jpg";
-
-  useEffect(() => {
-    const favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
-    setIsFavorite(favorites.includes(property.id));
-  }, [property.id]);
-
-  function toggleFavorite(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    const favorites = JSON.parse(localStorage.getItem("favorites") || "[]");
-    const updated = isFavorite
-      ? favorites.filter((id: string) => id !== property.id)
-      : [...favorites, property.id];
-    localStorage.setItem("favorites", JSON.stringify(updated));
-    setIsFavorite(!isFavorite);
-  }
+  const mainImage = property.images.find((image) => isAllowedPropertyImageUrl(image.url))?.url;
+  const imageCount = property._count?.images ?? property.images.length;
 
   return (
-    <Link href={`/properties/${property.id}`} className="group block">
-      <article
-        className="property-card rounded-[14px] overflow-hidden h-full flex flex-col"
-        style={{
-          background: "var(--card-bg)",
-          border: "1px solid var(--card-border)",
-          boxShadow: "var(--shadow-card)",
-        }}
-      >
+    <article
+      className="property-card group rounded-[14px] overflow-hidden h-full flex flex-col"
+      style={{
+        background: "var(--card-bg)",
+        border: "1px solid var(--card-border)",
+        boxShadow: "var(--shadow-card)",
+      }}
+    >
         {/* Image — Prioritized, clean, large */}
         <div className="relative aspect-[16/10] overflow-hidden">
-          <Image
-            src={mainImage}
-            alt={property.title}
-            fill
-            className="object-cover transition-transform duration-700 ease-out group-hover:scale-105"
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-          />
-
-          {/* Favorite button — subtle, top-right */}
-          <button
-            onClick={toggleFavorite}
-            className="absolute top-3 right-3 p-2 rounded-full bg-white/90 dark:bg-gray-900/70 backdrop-blur-sm transition-all hover:scale-110"
-            style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.08)" }}
-            aria-label={isFavorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+          <Link
+            href={`/properties/${property.id}`}
+            aria-label={`Ver detalhes de ${property.title}`}
+            className="block h-full"
           >
-            <Heart
-              className={`w-4 h-4 transition-colors ${
-                isFavorite ? "fill-red-500 text-red-500" : "text-gray-500 dark:text-gray-300"
-              }`}
-            />
-          </button>
-
-          {/* Featured badge — small, top-left, subtle gold */}
-          {property.featured && (
-            <div className="absolute top-3 left-3">
-              <span
-                className="inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-semibold uppercase tracking-wider"
-                style={{
-                  background: "var(--color-badge-featured-bg)",
-                  color: "var(--color-badge-featured-text)",
-                }}
-              >
-                Destaque
+            {mainImage ? (
+              <Image
+                src={mainImage}
+                alt={property.title}
+                fill
+                className="object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+                sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+              />
+            ) : (
+              <span className="flex h-full items-center justify-center" style={{ background: "var(--bg-secondary)" }}>
+                <Building2 className="h-10 w-10" aria-hidden="true" style={{ color: "var(--text-muted)" }} />
+                <span className="sr-only">Sem imagem disponível</span>
               </span>
-            </div>
-          )}
+            )}
 
-          {/* Image count indicator */}
-          {property.images.length > 1 && (
-            <div className="absolute bottom-3 right-3 flex items-center gap-1 px-2 py-1 rounded-md bg-black/50 text-white text-[10px] font-medium backdrop-blur-sm">
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                <rect x="3" y="3" width="18" height="18" rx="2" />
-                <circle cx="8.5" cy="8.5" r="1.5" />
-                <path d="m21 15-5-5L5 21" />
-              </svg>
-              {property.images.length}
-            </div>
-          )}
+            {/* Featured badge — small, top-left, subtle gold */}
+            {property.featured && (
+              <div className="absolute top-3 left-3">
+                <span
+                  className="inline-flex items-center px-2.5 py-1 rounded-md text-[10px] font-semibold uppercase tracking-wider"
+                  style={{
+                    background: "var(--color-badge-featured-bg)",
+                    color: "var(--color-badge-featured-text)",
+                  }}
+                >
+                  Destaque
+                </span>
+              </div>
+            )}
+
+            {/* Image count indicator */}
+            {imageCount > 1 && (
+              <div className="absolute bottom-3 right-3 flex items-center gap-1 px-2 py-1 rounded-md bg-black/50 text-white text-[10px] font-medium backdrop-blur-sm">
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3" y="3" width="18" height="18" rx="2" />
+                  <circle cx="8.5" cy="8.5" r="1.5" />
+                  <path d="m21 15-5-5L5 21" />
+                </svg>
+                {imageCount}
+              </div>
+            )}
+          </Link>
+
+          {/* Favorite button — separate from the property link */}
+          <FavoriteButton propertyId={property.id} />
         </div>
 
         {/* Content — Clean, generous spacing */}
-        <div className="p-5 flex-1 flex flex-col">
+        <Link href={`/properties/${property.id}`} className="p-5 flex-1 flex flex-col">
           {/* Badges — Small, pastel, non-competing */}
           <div className="flex flex-wrap gap-1.5 mb-3">
             <span
@@ -177,8 +162,7 @@ export default function PropertyCard({ property }: PropertyCardProps) {
               </div>
             )}
           </div>
-        </div>
-      </article>
-    </Link>
+        </Link>
+    </article>
   );
 }

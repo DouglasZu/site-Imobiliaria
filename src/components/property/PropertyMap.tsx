@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
+import "leaflet/dist/leaflet.css";
 
 const MapContainer = dynamic(
   () => import("react-leaflet").then((mod) => mod.MapContainer),
@@ -26,21 +27,7 @@ const Popup = dynamic(
 
 // Component to update map view when coordinates change
 const MapUpdater = dynamic(
-  () =>
-    Promise.resolve(function MapUpdaterInner({
-      center,
-      zoom,
-    }: {
-      center: [number, number];
-      zoom: number;
-    }) {
-      const { useMap } = require("react-leaflet");
-      const map = useMap();
-      useEffect(() => {
-        map.setView(center, zoom);
-      }, [center, zoom, map]);
-      return null;
-    }),
+  () => import("./MapUpdater"),
   { ssr: false }
 );
 
@@ -63,6 +50,15 @@ const CITY_COORDINATES: Record<string, [number, number]> = {
   "guarulhos": [-23.4538, -46.5333],
 };
 
+interface GeocodeResult {
+  lat: number;
+  lon: number;
+  zoom: number;
+}
+
+const geocodeCache = new Map<string, GeocodeResult | null>();
+const GEOCODE_TIMEOUT_MS = 4000;
+
 interface PropertyMapProps {
   city: string;
   neighborhood: string;
@@ -74,7 +70,7 @@ async function geocodeAddress(
   city: string,
   neighborhood: string,
   address?: string
-): Promise<{ lat: number; lon: number; zoom: number } | null> {
+): Promise<GeocodeResult | null> {
   // Try most specific first: full address
   const queries = [];
 
@@ -84,33 +80,44 @@ async function geocodeAddress(
   queries.push(`${neighborhood}, ${city}, Brasil`);
   queries.push(`${city}, Brasil`);
 
+  const cacheKey = queries.join("|").toLocaleLowerCase("pt-BR");
+  if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey) ?? null;
+
   for (const query of queries) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), GEOCODE_TIMEOUT_MS);
+
     try {
       const res = await fetch(
         `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=br`,
         {
-          headers: {
-            "User-Agent": "LarImoveis/1.0",
-          },
+          headers: { "Accept-Language": "pt-BR,pt;q=0.9" },
+          signal: controller.signal,
         }
       );
 
       if (!res.ok) continue;
 
-      const data = await res.json();
-      if (data && data.length > 0) {
+      const data: unknown = await res.json();
+      if (Array.isArray(data) && data.length > 0) {
+        const firstResult = data[0] as { lat?: unknown; lon?: unknown };
+        const lat = typeof firstResult.lat === "string" ? Number.parseFloat(firstResult.lat) : Number.NaN;
+        const lon = typeof firstResult.lon === "string" ? Number.parseFloat(firstResult.lon) : Number.NaN;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
         const zoom = address && queries.indexOf(query) === 0 ? 16 : 14;
-        return {
-          lat: parseFloat(data[0].lat),
-          lon: parseFloat(data[0].lon),
-          zoom,
-        };
+        const result = { lat, lon, zoom };
+        geocodeCache.set(cacheKey, result);
+        return result;
       }
     } catch {
       continue;
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 
+  geocodeCache.set(cacheKey, null);
   return null;
 }
 
@@ -123,21 +130,22 @@ export default function PropertyMap({
   const [coordinates, setCoordinates] = useState<[number, number] | null>(null);
   const [zoom, setZoom] = useState(14);
   const [loading, setLoading] = useState(true);
-  const geocoded = useRef(false);
+  const [approximate, setApproximate] = useState(false);
 
   useEffect(() => {
-    if (geocoded.current) return;
-    geocoded.current = true;
+    let cancelled = false;
 
     async function findCoordinates() {
       setLoading(true);
 
       // Try geocoding via Nominatim
       const result = await geocodeAddress(city, neighborhood, address);
+      if (cancelled) return;
 
       if (result) {
         setCoordinates([result.lat, result.lon]);
         setZoom(result.zoom);
+        setApproximate(result.zoom < 16);
       } else {
         // Fallback to known city coordinates
         const cityKey = city.toLowerCase().trim();
@@ -145,10 +153,9 @@ export default function PropertyMap({
         if (fallback) {
           setCoordinates(fallback);
           setZoom(13);
+          setApproximate(true);
         } else {
-          // Last resort: center of Brazil
-          setCoordinates([-14.235, -51.9253]);
-          setZoom(5);
+          setCoordinates(null);
         }
       }
 
@@ -156,9 +163,12 @@ export default function PropertyMap({
     }
 
     findCoordinates();
+    return () => {
+      cancelled = true;
+    };
   }, [city, neighborhood, address]);
 
-  if (loading || !coordinates) {
+  if (loading) {
     return (
       <div
         className="h-[300px] sm:h-[400px] rounded-xl overflow-hidden flex items-center justify-center"
@@ -180,16 +190,27 @@ export default function PropertyMap({
     );
   }
 
+  if (!coordinates) {
+    return (
+      <div
+        className="flex h-[300px] items-center justify-center rounded-xl px-6 text-center sm:h-[400px]"
+        role="status"
+        style={{ border: "1px solid var(--border)", background: "var(--bg-secondary)" }}
+      >
+        <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+          Localização indisponível. Consulte o endereço informado no anúncio.
+        </span>
+      </div>
+    );
+  }
+
   return (
     <div
       className="h-[300px] sm:h-[400px] rounded-xl overflow-hidden"
+      role="region"
+      aria-label={`Mapa de ${title}`}
       style={{ border: "1px solid var(--border)" }}
     >
-      <link
-        rel="stylesheet"
-        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        crossOrigin=""
-      />
       <MapContainer
         center={coordinates}
         zoom={zoom}
@@ -205,6 +226,12 @@ export default function PropertyMap({
             <strong>{title}</strong>
             <br />
             {neighborhood}, {city}
+            {approximate && (
+              <>
+                <br />
+                <span>Localização aproximada</span>
+              </>
+            )}
           </Popup>
         </Marker>
         <MapUpdater center={coordinates} zoom={zoom} />

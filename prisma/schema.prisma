@@ -7,24 +7,29 @@ datasource db {
 }
 
 model Property {
-  id           String   @id @default(cuid())
-  title        String
-  description  String
-  price        Float
-  city         String
-  neighborhood String
-  address      String?
-  type         String   // HOUSE, APARTMENT, LAND, COMMERCIAL, FARM
-  purpose      String   @default("SALE") // SALE, RENT
-  bedrooms     Int?
-  bathrooms    Int?
-  area         Float?   // square meters
-  whatsappPhone String?  // Broker's WhatsApp phone number (e.g. 5511999999999)
-  featured     Boolean  @default(false)
-  active       Boolean  @default(true)
-  images       Image[]
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id            String          @id @default(cuid())
+  title         String
+  description   String
+  price         Float
+  city          String
+  neighborhood  String
+  address       String?
+  type          String
+  purpose       String          @default("SALE")
+  bedrooms      Int?
+  bathrooms     Int?
+  area          Float?
+  whatsappPhone String?
+  featured      Boolean         @default(false)
+  active        Boolean         @default(true)
+  images        Image[]
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([active, featured(sort: Desc), createdAt(sort: Desc)])
+  @@index([city])
+  @@index([type])
+  @@index([purpose])
 }
 
 model Image {
@@ -34,10 +39,20 @@ model Image {
   order      Int      @default(0)
   propertyId String
   property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([propertyId, order])
 }
 
 model Admin {
   id           String @id @default(cuid())
   email        String @unique
   passwordHash String
+}
+
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(0)
+  expiresAt DateTime
+
+  @@index([expiresAt])
 }

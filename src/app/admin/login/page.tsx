@@ -24,10 +24,17 @@ export default function AdminLoginPage() {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await res.json();
+      const data: unknown = await res.json().catch(() => null);
 
       if (!res.ok) {
-        setError(data.error || "Erro ao fazer login");
+        setError(
+          data &&
+            typeof data === "object" &&
+            "error" in data &&
+            typeof data.error === "string"
+            ? data.error
+            : "Erro ao fazer login"
+        );
         return;
       }
 
@@ -60,7 +67,7 @@ export default function AdminLoginPage() {
         </div>
 
         {error && (
-          <div className="mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
+          <div role="alert" className="mb-6 p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
             {error}
           </div>
         )}
@@ -77,10 +84,13 @@ export default function AdminLoginPage() {
             <input
               id="email"
               type="email"
+              name="email"
+              autoComplete="username"
+              maxLength={254}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              placeholder="admin@larimoveis.com"
+              placeholder="voce@empresa.com.br"
               className="w-full px-4 py-3 rounded-lg text-sm transition-all"
               style={{
                 background: "var(--input-bg)",
@@ -102,6 +112,9 @@ export default function AdminLoginPage() {
               <input
                 id="password"
                 type={showPassword ? "text" : "password"}
+                name="password"
+                autoComplete="current-password"
+                maxLength={72}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -115,6 +128,9 @@ export default function AdminLoginPage() {
               />
               <button
                 type="button"
+                aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                aria-pressed={showPassword}
+                aria-controls="password"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 p-1"
                 style={{ color: "var(--text-muted)" }}
@@ -127,6 +143,7 @@ export default function AdminLoginPage() {
           <button
             type="submit"
             disabled={loading}
+            aria-busy={loading}
             className="w-full flex items-center justify-center gap-2 px-6 py-3.5 rounded-lg text-white font-semibold disabled:opacity-60 disabled:cursor-not-allowed transition-all hover:opacity-90"
             style={{ background: "#0F172A" }}
           >

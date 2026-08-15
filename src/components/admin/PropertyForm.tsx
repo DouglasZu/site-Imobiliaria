@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import {
   Loader2,
-  Upload,
+  Plus,
   X,
   ArrowUp,
   ArrowDown,
@@ -13,13 +13,21 @@ import {
   Phone,
 } from "lucide-react";
 import { propertyTypeLabels, propertyTypes, propertyPurposeLabels, propertyPurposes } from "@/lib/utils";
+import { propertySchema } from "@/lib/schemas/property";
+import {
+  getPropertyImageUrlError,
+  isAllowedPropertyImageUrl,
+  PROPERTY_IMAGE_HOSTNAME,
+  PROPERTY_IMAGE_MAX_COUNT,
+  PROPERTY_IMAGE_MAX_URL_LENGTH,
+} from "@/lib/image-policy";
 
 interface PropertyFormProps {
   initialData?: {
     id: string;
     title: string;
     description: string;
-    price: number;
+    price: number | string;
     city: string;
     neighborhood: string;
     address: string | null;
@@ -31,14 +39,12 @@ interface PropertyFormProps {
     whatsappPhone: string | null;
     featured: boolean;
     active: boolean;
-    images: { id: string; url: string; publicId: string }[];
+    images: { id: string; url: string }[];
   };
 }
 
 interface ImageItem {
   url: string;
-  publicId: string;
-  preview?: string;
 }
 
 export default function PropertyForm({ initialData }: PropertyFormProps) {
@@ -66,20 +72,37 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
   const [images, setImages] = useState<ImageItem[]>(
     initialData?.images?.map((img) => ({
       url: img.url,
-      publicId: img.publicId || "",
     })) || []
   );
 
   const [imageUrl, setImageUrl] = useState("");
+  const [imageError, setImageError] = useState("");
 
   function addImageByUrl() {
-    if (!imageUrl.trim()) return;
-    setImages((prev) => [...prev, { url: imageUrl.trim(), publicId: "" }]);
+    const normalizedUrl = imageUrl.trim();
+    const validationError = getPropertyImageUrlError(normalizedUrl);
+
+    if (validationError) {
+      setImageError(validationError);
+      return;
+    }
+    if (images.length >= PROPERTY_IMAGE_MAX_COUNT) {
+      setImageError(`Adicione no máximo ${PROPERTY_IMAGE_MAX_COUNT} imagens.`);
+      return;
+    }
+    if (images.some((image) => image.url === normalizedUrl)) {
+      setImageError("Esta imagem já foi adicionada.");
+      return;
+    }
+
+    setImages((prev) => [...prev, { url: normalizedUrl }]);
     setImageUrl("");
+    setImageError("");
   }
 
   function removeImage(index: number) {
     setImages((prev) => prev.filter((_, i) => i !== index));
+    setImageError("");
   }
 
   function moveImage(index: number, direction: "up" | "down") {
@@ -90,70 +113,18 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
     setImages(newImages);
   }
 
-  function compressImage(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = (event) => {
-        const img = new window.Image();
-        img.src = event.target?.result as string;
-        img.onload = () => {
-          const canvas = document.createElement("canvas");
-          const MAX_WIDTH = 1200;
-          const MAX_HEIGHT = 1200;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > height) {
-            if (width > MAX_WIDTH) {
-              height *= MAX_WIDTH / width;
-              width = MAX_WIDTH;
-            }
-          } else {
-            if (height > MAX_HEIGHT) {
-              width *= MAX_HEIGHT / height;
-              height = MAX_HEIGHT;
-            }
-          }
-
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext("2d");
-          ctx?.drawImage(img, 0, 0, width, height);
-          resolve(canvas.toDataURL("image/jpeg", 0.7));
-        };
-        img.onerror = (err) => reject(err);
-      };
-      reader.onerror = (err) => reject(err);
-    });
-  }
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const newImages: ImageItem[] = [];
-    
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      try {
-        const compressedBase64 = await compressImage(file);
-        newImages.push({ url: compressedBase64, publicId: "" });
-      } catch (err) {
-        console.error("Erro ao processar imagem", err);
-      }
-    }
-    
-    setImages((prev) => [...prev, ...newImages]);
-    e.target.value = '';
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setSaving(true);
 
     try {
+      const invalidImage = images.find((image) => !isAllowedPropertyImageUrl(image.url));
+      if (invalidImage) {
+        setError(`Todas as imagens devem usar URLs HTTPS de ${PROPERTY_IMAGE_HOSTNAME}.`);
+        return;
+      }
+
       const body = {
         title,
         description,
@@ -169,8 +140,15 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
         whatsappPhone: whatsappPhone || null,
         featured,
         active,
-        images: images.map((img) => ({ url: img.url, publicId: img.publicId })),
+        images: images.map((img, index) => ({ url: img.url, order: index })),
       };
+
+      const result = propertySchema.safeParse(body);
+      if (!result.success) {
+        setError(result.error.errors[0].message);
+        setSaving(false);
+        return;
+      }
 
       const url = isEditing
         ? `/api/properties/${initialData.id}`
@@ -205,9 +183,9 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8 max-w-3xl">
+    <form onSubmit={handleSubmit} className="space-y-8 max-w-3xl" aria-busy={saving}>
       {error && (
-        <div className="p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
+        <div role="alert" className="p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
           {error}
         </div>
       )}
@@ -230,6 +208,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
+              maxLength={120}
               placeholder="Ex: Apartamento 2 quartos no Centro"
               className="w-full px-4 py-3 rounded-lg text-sm"
               style={inputStyle}
@@ -245,6 +224,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               required
+              maxLength={5000}
               rows={5}
               placeholder="Descreva o imóvel em detalhes..."
               className="w-full px-4 py-3 rounded-xl text-sm resize-y"
@@ -301,7 +281,8 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
                 value={price}
                 onChange={(e) => setPrice(e.target.value)}
                 required
-                min="0"
+                min="0.01"
+                max="1000000000"
                 step="0.01"
                 placeholder="350000"
                 className="w-full px-4 py-3 rounded-xl text-sm"
@@ -321,7 +302,10 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               id="whatsappPhone"
               value={whatsappPhone}
               onChange={(e) => setWhatsappPhone(e.target.value)}
-              placeholder="5511999999999 (código do país + DDD + número)"
+              inputMode="numeric"
+              pattern="[0-9]{10,15}"
+              maxLength={15}
+              placeholder="DDI + DDD + número, somente dígitos"
               className="w-full px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
             />
@@ -350,6 +334,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               value={city}
               onChange={(e) => setCity(e.target.value)}
               required
+              maxLength={100}
               placeholder="São Paulo"
               className="w-full px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
@@ -364,6 +349,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               value={neighborhood}
               onChange={(e) => setNeighborhood(e.target.value)}
               required
+              maxLength={100}
               placeholder="Vila Mariana"
               className="w-full px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
@@ -377,6 +363,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               id="address"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
+              maxLength={300}
               placeholder="Rua das Flores, 123"
               className="w-full px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
@@ -404,6 +391,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               value={bedrooms}
               onChange={(e) => setBedrooms(e.target.value)}
               min="0"
+              max="100"
               placeholder="3"
               className="w-full px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
@@ -419,6 +407,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               value={bathrooms}
               onChange={(e) => setBathrooms(e.target.value)}
               min="0"
+              max="100"
               placeholder="2"
               className="w-full px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
@@ -433,7 +422,8 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               type="number"
               value={area}
               onChange={(e) => setArea(e.target.value)}
-              min="0"
+              min="0.01"
+              max="10000000"
               step="0.01"
               placeholder="120"
               className="w-full px-4 py-3 rounded-xl text-sm"
@@ -452,87 +442,96 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
           Imagens
         </h2>
 
-        {/* Add Actions */}
-        <div className="flex flex-col sm:flex-row gap-3 mb-5">
-          <label className="flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-white text-sm font-medium transition-all cursor-pointer hover:opacity-90 shrink-0" style={{ background: "#0F172A" }}>
-            <ImageIcon className="w-4 h-4" />
-            Fazer Upload de Fotos
-            <input 
-              type="file" 
-              accept="image/*" 
-              multiple 
-              className="hidden" 
-              onChange={handleFileUpload} 
-            />
-          </label>
-          
-          <div className="flex flex-1 gap-2">
+        {/* Add image URL */}
+        <div className="mb-5">
+          <div className="flex flex-col sm:flex-row gap-2">
+            <label htmlFor="imageUrl" className="sr-only">
+              URL HTTPS da imagem
+            </label>
             <input
+              id="imageUrl"
+              type="url"
               value={imageUrl}
-              onChange={(e) => setImageUrl(e.target.value)}
+              onChange={(e) => {
+                setImageUrl(e.target.value);
+                setImageError("");
+              }}
               onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addImageByUrl())}
-              placeholder="Ou cole uma URL..."
+              placeholder={`https://${PROPERTY_IMAGE_HOSTNAME}/...`}
+              maxLength={PROPERTY_IMAGE_MAX_URL_LENGTH}
+              aria-describedby="image-url-help image-url-error"
+              aria-invalid={Boolean(imageError)}
               className="flex-1 px-4 py-3 rounded-xl text-sm"
               style={inputStyle}
             />
             <button
               type="button"
               onClick={addImageByUrl}
+              disabled={images.length >= PROPERTY_IMAGE_MAX_COUNT}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-colors shrink-0"
               style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
             >
-              <Upload className="w-4 h-4" />
+              <Plus className="w-4 h-4" />
               Adicionar URL
             </button>
           </div>
+          <div id="image-url-help" className="mt-2 flex flex-wrap justify-between gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
+            <span>Somente URLs HTTPS de {PROPERTY_IMAGE_HOSTNAME}.</span>
+            <span>{images.length}/{PROPERTY_IMAGE_MAX_COUNT} imagens</span>
+          </div>
+          {imageError && (
+            <p id="image-url-error" role="alert" className="mt-2 text-sm text-red-600 dark:text-red-400">
+              {imageError}
+            </p>
+          )}
         </div>
 
         {/* Image list */}
         {images.length === 0 ? (
-          <label
-            className="flex flex-col items-center justify-center py-16 rounded-xl cursor-pointer hover:bg-black/5 dark:hover:bg-white/5 transition-colors group"
+          <div
+            className="flex flex-col items-center justify-center py-16 rounded-xl"
             style={{ border: "2px dashed var(--border)" }}
           >
             <div className="w-14 h-14 rounded-xl bg-gray-100 dark:bg-gray-850 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-              <Upload className="w-6 h-6 text-gray-500 dark:text-gray-400" />
+              <ImageIcon className="w-6 h-6 text-gray-500 dark:text-gray-400" />
             </div>
             <p className="text-sm font-medium mb-1" style={{ color: "var(--text)" }}>
-              Clique para selecionar as fotos
+              Nenhuma imagem adicionada
             </p>
             <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Ou arraste os arquivos para cá
+              Cole uma URL permitida no campo acima
             </p>
-            <input 
-              type="file" 
-              accept="image/*" 
-              multiple 
-              className="hidden" 
-              onChange={handleFileUpload} 
-            />
-          </label>
+          </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             {images.map((img, index) => (
-              <div key={index} className="relative group rounded-xl overflow-hidden aspect-[4/3]" style={{ border: "1px solid var(--border)" }}>
-                <Image
-                  src={img.url}
-                  alt={`Imagem ${index + 1}`}
-                  fill
-                  className="object-cover"
-                  sizes="200px"
-                />
+              <div key={`${img.url}-${index}`} className="relative group rounded-xl overflow-hidden aspect-[4/3]" style={{ border: "1px solid var(--border)" }}>
+                {isAllowedPropertyImageUrl(img.url) ? (
+                  <Image
+                    src={img.url}
+                    alt={`Imagem ${index + 1}`}
+                    fill
+                    className="object-cover"
+                    sizes="200px"
+                  />
+                ) : (
+                  <div className="h-full p-4 flex items-center justify-center text-center text-xs text-red-600 dark:text-red-400">
+                    URL incompatível. Remova esta imagem.
+                  </div>
+                )}
                  {index === 0 && (
                   <div className="absolute top-2 left-2 px-2 py-0.5 rounded text-white text-[10px] font-bold uppercase tracking-wider" style={{ background: "#0F172A" }}>
                     Principal
                   </div>
                 )}
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100">
+                <div className="absolute inset-0 flex items-center justify-center gap-1 bg-black/30 opacity-100 transition-colors sm:bg-black/0 sm:opacity-0 sm:group-hover:bg-black/30 sm:group-hover:opacity-100 sm:group-focus-within:bg-black/30 sm:group-focus-within:opacity-100">
                   <button
                     type="button"
                     onClick={() => moveImage(index, "up")}
                     disabled={index === 0}
                     className="p-1.5 rounded-lg bg-white/90 text-gray-700 disabled:opacity-30 hover:bg-white transition-colors"
                     title="Mover para cima"
+                    aria-label={`Mover imagem ${index + 1} para cima`}
                   >
                     <ArrowUp className="w-3.5 h-3.5" />
                   </button>
@@ -542,6 +541,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
                     disabled={index === images.length - 1}
                     className="p-1.5 rounded-lg bg-white/90 text-gray-700 disabled:opacity-30 hover:bg-white transition-colors"
                     title="Mover para baixo"
+                    aria-label={`Mover imagem ${index + 1} para baixo`}
                   >
                     <ArrowDown className="w-3.5 h-3.5" />
                   </button>
@@ -550,6 +550,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
                     onClick={() => removeImage(index)}
                     className="p-1.5 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"
                     title="Remover"
+                    aria-label={`Remover imagem ${index + 1}`}
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>

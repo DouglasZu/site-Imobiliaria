@@ -1,128 +1,215 @@
 import { type NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin } from "@/lib/auth";
+import {
+  readJsonBody,
+  validateSameOriginRequest,
+} from "@/lib/http-security";
+import { logServerError } from "@/lib/logging";
+import { prisma } from "@/lib/prisma";
+import {
+  propertyIdSchema,
+  propertySchema,
+  propertyStatusSchema,
+} from "@/lib/schemas/property";
+
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
+const PROPERTY_BODY_LIMIT = 64 * 1024;
+
+function isMissingRecord(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2025"
+  );
+}
+
+function invalidIdResponse() {
+  return Response.json(
+    { error: "Identificador inválido" },
+    { status: 400, headers: NO_STORE_HEADERS }
+  );
+}
 
 // GET /api/properties/[id]
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const parsedId = propertyIdSchema.safeParse((await params).id);
+  if (!parsedId.success) return invalidIdResponse();
+
   try {
-    const { id } = await params;
     const property = await prisma.property.findUnique({
-      where: { id },
+      where: { id: parsedId.data },
       include: { images: { orderBy: { order: "asc" } } },
     });
 
     if (!property) {
-      return Response.json({ error: "Imóvel não encontrado" }, { status: 404 });
+      return Response.json(
+        { error: "Imóvel não encontrado" },
+        { status: 404, headers: NO_STORE_HEADERS }
+      );
     }
 
-    // Inactive properties are only visible to authenticated admins
-    if (!property.active) {
-      const admin = await getCurrentAdmin();
-      if (!admin) {
-        return Response.json({ error: "Imóvel não encontrado" }, { status: 404 });
-      }
+    if (!property.active && !(await getCurrentAdmin())) {
+      return Response.json(
+        { error: "Imóvel não encontrado" },
+        { status: 404, headers: NO_STORE_HEADERS }
+      );
     }
 
-    return Response.json(property);
-  } catch {
-    return Response.json({ error: "Erro ao buscar imóvel" }, { status: 500 });
+    return Response.json(property, { headers: NO_STORE_HEADERS });
+  } catch (error) {
+    logServerError("properties.get_failed", error);
+    return Response.json(
+      { error: "Erro ao buscar imóvel" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
   }
 }
 
-// PUT /api/properties/[id] — Update (admin only)
+// PUT /api/properties/[id] — Replace a property (admin only).
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const admin = await getCurrentAdmin();
-    if (!admin) {
-      return Response.json({ error: "Não autorizado" }, { status: 401 });
+    if (!(await getCurrentAdmin())) {
+      return Response.json(
+        { error: "Não autorizado" },
+        { status: 401, headers: NO_STORE_HEADERS }
+      );
     }
 
-    const { id } = await params;
-    const data = await request.json();
+    const parsedId = propertyIdSchema.safeParse((await params).id);
+    if (!parsedId.success) return invalidIdResponse();
 
-    const {
-      title,
-      description,
-      price,
-      city,
-      neighborhood,
-      address,
-      type,
-      purpose,
-      bedrooms,
-      bathrooms,
-      area,
-      whatsappPhone,
-      featured,
-      active,
-      images,
-    } = data;
+    const body = await readJsonBody(request, PROPERTY_BODY_LIMIT);
+    if (!body.success) return body.response;
 
-    // Delete existing images and recreate
-    if (images !== undefined) {
-      await prisma.image.deleteMany({ where: { propertyId: id } });
+    const result = propertySchema.safeParse(body.data);
+    if (!result.success) {
+      return Response.json(
+        { error: result.error.issues[0]?.message ?? "Dados inválidos" },
+        { status: 400, headers: NO_STORE_HEADERS }
+      );
     }
 
+    const { images, ...propertyData } = result.data;
     const property = await prisma.property.update({
-      where: { id },
+      where: { id: parsedId.data },
       data: {
-        ...(title !== undefined && { title }),
-        ...(description !== undefined && { description }),
-        ...(price !== undefined && { price: parseFloat(price) }),
-        ...(city !== undefined && { city }),
-        ...(neighborhood !== undefined && { neighborhood }),
-        ...(address !== undefined && { address: address || null }),
-        ...(type !== undefined && { type }),
-        ...(purpose !== undefined && { purpose }),
-        ...(bedrooms !== undefined && { bedrooms: bedrooms ? parseInt(bedrooms) : null }),
-        ...(bathrooms !== undefined && { bathrooms: bathrooms ? parseInt(bathrooms) : null }),
-        ...(area !== undefined && { area: area ? parseFloat(area) : null }),
-        ...(whatsappPhone !== undefined && { whatsappPhone: whatsappPhone || null }),
-        ...(featured !== undefined && { featured }),
-        ...(active !== undefined && { active }),
-        ...(images !== undefined && {
-          images: {
-            create: images.map((img: { url: string; publicId?: string }, index: number) => ({
-              url: img.url,
-              publicId: img.publicId || "",
-              order: index,
-            })),
-          },
-        }),
+        ...propertyData,
+        images: {
+          deleteMany: {},
+          create: images.map((image, order) => ({ url: image.url, order })),
+        },
       },
       include: { images: { orderBy: { order: "asc" } } },
     });
 
-    return Response.json(property);
+    return Response.json(property, { headers: NO_STORE_HEADERS });
   } catch (error) {
-    console.error("Error updating property:", error);
-    return Response.json({ error: "Erro ao atualizar imóvel" }, { status: 500 });
+    if (isMissingRecord(error)) {
+      return Response.json(
+        { error: "Imóvel não encontrado" },
+        { status: 404, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    logServerError("properties.update_failed", error);
+    return Response.json(
+      { error: "Erro ao atualizar imóvel" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
   }
 }
 
-// DELETE /api/properties/[id] — Delete (admin only)
+// PATCH /api/properties/[id] — Update administrative status only.
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    if (!(await getCurrentAdmin())) {
+      return Response.json(
+        { error: "Não autorizado" },
+        { status: 401, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const parsedId = propertyIdSchema.safeParse((await params).id);
+    if (!parsedId.success) return invalidIdResponse();
+
+    const body = await readJsonBody(request, 8 * 1024);
+    if (!body.success) return body.response;
+
+    const result = propertyStatusSchema.safeParse(body.data);
+    if (!result.success) {
+      return Response.json(
+        { error: result.error.issues[0]?.message ?? "Dados inválidos" },
+        { status: 400, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const property = await prisma.property.update({
+      where: { id: parsedId.data },
+      data: result.data,
+      include: { images: { orderBy: { order: "asc" }, take: 1 } },
+    });
+
+    return Response.json(property, { headers: NO_STORE_HEADERS });
+  } catch (error) {
+    if (isMissingRecord(error)) {
+      return Response.json(
+        { error: "Imóvel não encontrado" },
+        { status: 404, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    logServerError("properties.status_update_failed", error);
+    return Response.json(
+      { error: "Erro ao atualizar status" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
+  }
+}
+
+// DELETE /api/properties/[id] — Delete (admin only).
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const admin = await getCurrentAdmin();
-    if (!admin) {
-      return Response.json({ error: "Não autorizado" }, { status: 401 });
+    if (!(await getCurrentAdmin())) {
+      return Response.json(
+        { error: "Não autorizado" },
+        { status: 401, headers: NO_STORE_HEADERS }
+      );
     }
 
-    const { id } = await params;
+    const parsedId = propertyIdSchema.safeParse((await params).id);
+    if (!parsedId.success) return invalidIdResponse();
 
-    await prisma.property.delete({ where: { id } });
+    const originError = validateSameOriginRequest(request);
+    if (originError) return originError;
 
-    return Response.json({ success: true });
-  } catch {
-    return Response.json({ error: "Erro ao excluir imóvel" }, { status: 500 });
+    await prisma.property.delete({ where: { id: parsedId.data } });
+
+    return Response.json({ success: true }, { headers: NO_STORE_HEADERS });
+  } catch (error) {
+    if (isMissingRecord(error)) {
+      return Response.json(
+        { error: "Imóvel não encontrado" },
+        { status: 404, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    logServerError("properties.delete_failed", error);
+    return Response.json(
+      { error: "Erro ao excluir imóvel" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
   }
 }

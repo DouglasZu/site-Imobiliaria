@@ -1,79 +1,84 @@
-# Lar Imóveis - Plataforma Imobiliária
+# Lar Imóveis
 
-Uma plataforma completa de anúncios imobiliários construída com Next.js 16/17 (App Router), Prisma, SQLite e Tailwind CSS v4. Focada em performance, design moderno e usabilidade.
+Catálogo imobiliário em Next.js 16.3 (App Router), React 19, TypeScript, Prisma 7 e Tailwind CSS 4. O projeto inclui páginas públicas, filtros, detalhes com mapa, contato por WhatsApp e um painel administrativo com CRUD.
 
-## Recursos Principais
+## Arquitetura
 
-### Área Pública
-- 🏠 **Catálogo de Imóveis**: Grade com filtros dinâmicos por tipo, cidade, faixa de preço e busca textual.
-- 📱 **Design Responsivo**: Layout "mobile-first", adaptando-se perfeitamente de celulares a desktops grandes.
-- 🖼️ **Galeria de Imagens**: Carrossel elegante com suporte a modo tela cheia (lightbox) para visualização em alta definição.
-- 🗺️ **Mapas Integrados**: Visualização da localização de cada imóvel utilizando Leaflet e OpenStreetMap.
-- 💬 **Contato Rápido**: Integração com WhatsApp gerando links com mensagens pré-preenchidas.
-- 🌙 **Modo Escuro**: Suporte nativo ao modo escuro (Dark Mode) respeitando as configurações do sistema do usuário e toggle manual.
+- Server Components nas páginas públicas e acesso a dados somente no servidor.
+- Route Handlers REST em `src/app/api`.
+- Autenticação administrativa por JWT assinado, cookie HttpOnly e autorização revalidada no banco.
+- Prisma com SQLite para desenvolvimento local.
+- Vitest para testes unitários/de integração e Playwright para E2E desktop/mobile.
+- Imagens por URL HTTPS de `images.unsplash.com`, com até 12 imagens por anúncio. Upload de arquivo não faz parte desta versão.
+- Leaflet/OpenStreetMap e Nominatim para o mapa/geocodificação.
 
-### Área Administrativa (Admin)
-- 🔒 **Autenticação Segura**: Login protegido usando JWT (JSON Web Tokens) e cookies HTTP-only (bcryp para senhas).
-- 📊 **Dashboard de Gerenciamento**: Visão geral dos imóveis, estatísticas de anúncios e controles rápidos (ativar/desativar).
-- 📝 **CRUD Completo**: Interface simples para criar, editar, listar e excluir propriedades.
-- 📷 **Gerenciador de Imagens**: Upload de múltiplas fotos (por URL para esta MVP) com recurso de reordenação arrastar/clicar e seleção de foto principal.
+## Bloqueio de deploy na Vercel
 
-## Tecnologias Utilizadas
+> **Não publique esta versão na Vercel usando SQLite.** O filesystem das Functions é efêmero e não compartilhado. Antes do deploy, migre schema e dados para um banco externo persistente, gere migrações para o novo provider e use bancos separados em Production e Preview.
 
-- **Frontend/Backend**: [Next.js 16.2](https://nextjs.org/) (App Router, Server Actions, Server Components)
-- **Linguagem**: [TypeScript](https://www.typescriptlang.org/)
-- **Estilização**: [Tailwind CSS v4](https://tailwindcss.com/) (com configuração CSS-first via `@theme`)
-- **Banco de Dados**: SQLite
-- **ORM**: [Prisma v7](https://www.prisma.io/) (utilizando driver adapter `better-sqlite3`)
-- **Ícones**: [Lucide React](https://lucide.dev/)
-- **Mapas**: [Leaflet](https://leafletjs.com/) e [React Leaflet](https://react-leaflet.js.org/)
-- **Autenticação**: `jose` (JWT) e `bcryptjs`
+## Requisitos
 
-## Pré-requisitos
+- Node.js 24.x
+- npm com suporte a `package-lock.json` v3
 
-- Node.js (v20 ou superior recomendado)
-- npm (v10 ou superior)
+## Configuração local
 
-## Como rodar o projeto localmente
+1. Instale as dependências:
 
-1. **Instale as dependências**
    ```bash
    npm install
    ```
 
-2. **Configure o Banco de Dados (Migrações)**
-   O banco de dados SQLite será criado na pasta `prisma/dev.db`.
+2. Copie `.env.example` para `.env` e preencha todos os valores obrigatórios. Os campos vazios são intencionais: não existem credenciais padrão.
+
+3. Aplique as migrações existentes. O SQLite local será criado como `dev.db` na raiz:
+
    ```bash
-   npx prisma generate
-   npx prisma migrate dev --name init
+   npm run db:deploy
    ```
 
-3. **Configure as Variáveis de Ambiente**
-   Copie o arquivo de exemplo e ajuste os valores:
-   ```bash
-   cp .env.example .env
-   ```
-   Edite o `.env` com suas configurações (e-mail e senha do admin, etc.).
+4. Opcionalmente, carregue os dados de demonstração:
 
-4. **Popule o Banco de Dados (Opcional - Recomendado)**
-   Este comando criará 12 imóveis de exemplo e o usuário administrador usando as credenciais definidas no `.env`.
    ```bash
-   npx prisma db seed
+   npm run seed
    ```
 
-5. **Inicie o Servidor de Desenvolvimento**
+   O seed substitui o catálogo e os administradores dentro de uma transação. Ele só executa com `SEED_REPLACE_CONFIRM=REPLACE_CATALOG_AND_ADMINS`; remova essa confirmação logo depois. Em produção, exige também `ALLOW_PRODUCTION_SEED=true` para aquela execução.
+
+5. Inicie o servidor:
+
    ```bash
    npm run dev
    ```
 
-6. **Acesse a Aplicação**
-   - Site Público: [http://localhost:3000](http://localhost:3000)
-   - Painel Administrativo: [http://localhost:3000/admin](http://localhost:3000/admin)
+Site público: <http://localhost:3000>
 
-## Credenciais do Admin
+Painel: <http://localhost:3000/admin>
 
-As credenciais do painel administrativo são definidas no arquivo `.env` (variáveis `ADMIN_EMAIL` e `ADMIN_PASSWORD`) e criadas ao executar o seed. Consulte o `.env.example` para referência.
+## Variáveis de ambiente
 
-## Licença
+| Variável | Escopo | Uso |
+| --- | --- | --- |
+| `DATABASE_URL` | Server/runtime e migrations | Conexão Prisma |
+| `JWT_SECRET` | Server/runtime | Assinatura de sessão e HMAC do rate limit |
+| `WHATSAPP_PHONE` | Server/runtime | Contato padrão |
+| `ADMIN_EMAIL` | Seed somente | Criação do administrador |
+| `ADMIN_PASSWORD` | Seed somente | Senha inicial, nunca exposta ao cliente |
+| `SEED_REPLACE_CONFIRM` | Seed somente | Confirmação explícita para apagar e recriar catálogo/admins |
+| `ALLOW_PRODUCTION_SEED` | Seed somente | Trava explícita para produção |
+| `SITE_URL` | Build/runtime | Canonical, sitemap e robots |
 
-Projeto desenvolvido para fins educacionais/demonstrativos.
+Não há variáveis `NEXT_PUBLIC_*` nem secrets enviados ao navegador.
+
+## Verificação
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run test:e2e
+npm audit
+```
+
+O workflow em `.github/workflows/ci.yml` repete lint, tipos, testes, build, E2E, migrations em banco limpo e auditoria de dependências.

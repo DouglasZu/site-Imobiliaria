@@ -16,16 +16,31 @@ export default function PropertyFilters() {
   const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") || "");
   const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") || "");
   const [cities, setCities] = useState<string[]>([]);
+  const [citiesUnavailable, setCitiesUnavailable] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [filterError, setFilterError] = useState("");
 
   useEffect(() => {
+    let active = true;
     fetch("/api/properties/cities")
-      .then((res) => res.json())
-      .then((data) => setCities(data))
-      .catch(() => {});
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error("cities request failed"))))
+      .then((data: unknown) => {
+        if (active && Array.isArray(data)) {
+          setCities(data.filter((value): value is string => typeof value === "string"));
+        }
+      })
+      .catch(() => {
+        if (active) setCitiesUnavailable(true);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
+    // Keep controlled inputs in sync with browser history navigation.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSearch(searchParams.get("search") || "");
     setType(searchParams.get("type") || "ALL");
     setPurpose(searchParams.get("purpose") || "ALL");
@@ -35,13 +50,35 @@ export default function PropertyFilters() {
   }, [searchParams]);
 
   const applyFilters = useCallback(() => {
+    const parsedMinPrice = minPrice === "" ? undefined : Number(minPrice);
+    const parsedMaxPrice = maxPrice === "" ? undefined : Number(maxPrice);
+    const invalidPrice = [parsedMinPrice, parsedMaxPrice].some(
+      (value) => value !== undefined && (!Number.isFinite(value) || value < 0 || value > 1_000_000_000)
+    );
+
+    if (invalidPrice) {
+      setFilterError("Informe preços entre zero e um bilhão de reais.");
+      setShowFilters(true);
+      return;
+    }
+    if (
+      parsedMinPrice !== undefined &&
+      parsedMaxPrice !== undefined &&
+      parsedMinPrice > parsedMaxPrice
+    ) {
+      setFilterError("O preço máximo deve ser maior ou igual ao preço mínimo.");
+      setShowFilters(true);
+      return;
+    }
+
+    setFilterError("");
     const params = new URLSearchParams();
-    if (search) params.set("search", search);
+    if (search.trim()) params.set("search", search.trim());
     if (type && type !== "ALL") params.set("type", type);
     if (purpose && purpose !== "ALL") params.set("purpose", purpose);
     if (city) params.set("city", city);
-    if (minPrice) params.set("minPrice", minPrice);
-    if (maxPrice) params.set("maxPrice", maxPrice);
+    if (parsedMinPrice !== undefined) params.set("minPrice", String(parsedMinPrice));
+    if (parsedMaxPrice !== undefined) params.set("maxPrice", String(parsedMaxPrice));
     params.set("page", "1");
 
     router.push(`/properties?${params.toString()}`);
@@ -54,13 +91,18 @@ export default function PropertyFilters() {
     setCity("");
     setMinPrice("");
     setMaxPrice("");
+    setFilterError("");
     router.push("/properties");
   }
 
   const hasActiveFilters = search || (type && type !== "ALL") || (purpose && purpose !== "ALL") || city || minPrice || maxPrice;
 
   return (
-    <div
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        applyFilters();
+      }}
       className="rounded-xl p-4 sm:p-6 mb-8"
       style={{
         background: "var(--card-bg)",
@@ -76,6 +118,7 @@ export default function PropertyFilters() {
           { value: "RENT", label: "Alugar" },
         ].map((tab) => (
           <button
+            type="button"
             key={tab.value}
             onClick={() => {
               setPurpose(tab.value);
@@ -98,6 +141,7 @@ export default function PropertyFilters() {
                 ? { background: "#0F172A" }
                 : { color: "var(--text-muted)" }
             }
+            aria-pressed={purpose === tab.value}
           >
             {tab.label}
           </button>
@@ -108,12 +152,17 @@ export default function PropertyFilters() {
       <div className="flex gap-3">
         <div className="flex-1 relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4.5 h-4.5" style={{ color: "var(--text-muted)" }} />
+          <label htmlFor="property-search" className="sr-only">
+            Buscar por título, cidade ou bairro
+          </label>
           <input
+            id="property-search"
+            name="search"
             type="text"
             placeholder="Buscar por título, cidade ou bairro..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && applyFilters()}
+            maxLength={200}
             className="w-full pl-12 pr-4 py-3 rounded-lg text-sm transition-all"
             style={{
               background: "var(--input-bg)",
@@ -123,6 +172,7 @@ export default function PropertyFilters() {
           />
         </div>
         <button
+          type="button"
           onClick={() => setShowFilters(!showFilters)}
           className={`flex items-center gap-2 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
             showFilters || hasActiveFilters
@@ -134,12 +184,14 @@ export default function PropertyFilters() {
               ? { background: "#0F172A" }
               : { background: "var(--input-bg)", border: "1px solid var(--border)", color: "var(--text-secondary)" }
           }
+          aria-expanded={showFilters}
+          aria-controls="property-extra-filters"
         >
           <SlidersHorizontal className="w-4 h-4" />
           <span className="hidden sm:inline">Filtros</span>
         </button>
         <button
-          onClick={applyFilters}
+          type="submit"
           className="px-6 py-3 rounded-lg text-sm font-semibold text-white transition-all hover:opacity-90"
           style={{ background: "#0F172A" }}
         >
@@ -149,13 +201,15 @@ export default function PropertyFilters() {
 
       {/* Expanded Filters */}
       {showFilters && (
-        <div className="mt-4 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-down" style={{ borderTop: "1px solid var(--border)" }}>
+        <div id="property-extra-filters" className="mt-4 pt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 animate-slide-down" style={{ borderTop: "1px solid var(--border)" }}>
           {/* Type */}
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
+            <label htmlFor="property-type" className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
               Tipo de Imóvel
             </label>
             <select
+              id="property-type"
+              name="type"
               value={type}
               onChange={(e) => setType(e.target.value)}
               className="w-full px-3 py-2.5 rounded-lg text-sm"
@@ -176,10 +230,12 @@ export default function PropertyFilters() {
 
           {/* City */}
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
+            <label htmlFor="property-city" className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
               Cidade
             </label>
             <select
+              id="property-city"
+              name="city"
               value={city}
               onChange={(e) => setCity(e.target.value)}
               className="w-full px-3 py-2.5 rounded-lg text-sm"
@@ -200,14 +256,24 @@ export default function PropertyFilters() {
 
           {/* Min Price */}
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
+            <label htmlFor="property-min-price" className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
               Preço Mínimo
             </label>
             <input
+              id="property-min-price"
+              name="minPrice"
               type="number"
+              min="0"
+              max="1000000000"
+              step="0.01"
               placeholder="R$ 0"
               value={minPrice}
-              onChange={(e) => setMinPrice(e.target.value)}
+              onChange={(e) => {
+                setMinPrice(e.target.value);
+                setFilterError("");
+              }}
+              aria-invalid={Boolean(filterError)}
+              aria-describedby={filterError ? "property-filter-error" : undefined}
               className="w-full px-3 py-2.5 rounded-lg text-sm"
               style={{
                 background: "var(--input-bg)",
@@ -219,14 +285,24 @@ export default function PropertyFilters() {
 
           {/* Max Price */}
           <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
+            <label htmlFor="property-max-price" className="block text-xs font-medium mb-1.5" style={{ color: "var(--text-muted)" }}>
               Preço Máximo
             </label>
             <input
+              id="property-max-price"
+              name="maxPrice"
               type="number"
+              min="0"
+              max="1000000000"
+              step="0.01"
               placeholder="R$ 999.999"
               value={maxPrice}
-              onChange={(e) => setMaxPrice(e.target.value)}
+              onChange={(e) => {
+                setMaxPrice(e.target.value);
+                setFilterError("");
+              }}
+              aria-invalid={Boolean(filterError)}
+              aria-describedby={filterError ? "property-filter-error" : undefined}
               className="w-full px-3 py-2.5 rounded-lg text-sm"
               style={{
                 background: "var(--input-bg)",
@@ -240,6 +316,7 @@ export default function PropertyFilters() {
           {hasActiveFilters && (
             <div className="sm:col-span-2 lg:col-span-4 flex justify-end">
               <button
+                type="button"
                 onClick={clearFilters}
                 className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-all hover:bg-red-50 dark:hover:bg-red-950/20"
                 style={{ color: "var(--color-danger)" }}
@@ -251,6 +328,16 @@ export default function PropertyFilters() {
           )}
         </div>
       )}
-    </div>
+      {filterError && (
+        <p id="property-filter-error" className="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">
+          {filterError}
+        </p>
+      )}
+      {citiesUnavailable && (
+        <p className="mt-3 text-xs" role="status" style={{ color: "var(--text-muted)" }}>
+          A lista de cidades não pôde ser carregada; os demais filtros continuam disponíveis.
+        </p>
+      )}
+    </form>
   );
 }

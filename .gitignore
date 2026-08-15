@@ -34,8 +34,13 @@ yarn-error.log*
 .env*
 !.env.example
 
-# database
+# local databases and SQLite sidecars
 *.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
 
 # vercel
 .vercel

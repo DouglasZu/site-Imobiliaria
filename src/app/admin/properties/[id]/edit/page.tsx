@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { prisma } from "@/lib/prisma";
+import { findAdminPropertyById } from "@/lib/queries/property";
 import PropertyForm from "@/components/admin/PropertyForm";
 import type { Metadata } from "next";
 
@@ -14,10 +14,7 @@ interface EditPropertyPageProps {
 export default async function EditPropertyPage({ params }: EditPropertyPageProps) {
   const { id } = await params;
 
-  const property = await prisma.property.findUnique({
-    where: { id },
-    include: { images: { orderBy: { order: "asc" } } },
-  });
+  const property = await findAdminPropertyById(id);
 
   if (!property) notFound();
 
@@ -31,7 +28,7 @@ export default async function EditPropertyPage({ params }: EditPropertyPageProps
           Atualize as informações do imóvel
         </p>
       </div>
-      <PropertyForm initialData={property} />
+      <PropertyForm initialData={{ ...property, price: property.price.toString() }} />
     </div>
   );
 }

@@ -48,7 +48,7 @@
   --color-warning: #d97706;
 
   /* Fonts */
-  --font-sans: var(--font-inter);
+  --font-sans: Inter, system-ui, -apple-system, sans-serif;
 
   /* Spacing */
   --radius-card: 0.875rem;
@@ -93,7 +93,7 @@
   --bg-secondary: #111827;
   --text: #F9FAFB;
   --text-secondary: #D1D5DB;
-  --text-muted: #6B7280;
+  --text-muted: #9CA3AF;
   --border: #1F2937;
   --border-hover: #374151;
   --card-bg: #111827;
@@ -121,7 +121,7 @@
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-inter), system-ui, -apple-system, sans-serif;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -274,17 +274,24 @@ body {
 }
 
 /* ===== Focus States ===== */
-input:focus,
-select:focus,
-textarea:focus {
+:where(a, button, input, select, textarea):focus-visible {
   outline: 2px solid #0F172A;
   outline-offset: 2px;
 }
 
-.dark input:focus,
-.dark select:focus,
-.dark textarea:focus {
+.dark :where(a, button, input, select, textarea):focus-visible {
   outline-color: #64748b;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* ===== Toast Notification ===== */

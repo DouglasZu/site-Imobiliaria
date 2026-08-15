@@ -1,43 +1,70 @@
 "use client";
 
 import { useState } from "react";
-import { Share2, Check } from "lucide-react";
+import { AlertCircle, Check, Share2 } from "lucide-react";
+
+type ShareStatus = "idle" | "copied" | "error";
 
 export default function ShareButton() {
-  const [copied, setCopied] = useState(false);
+  const [status, setStatus] = useState<ShareStatus>("idle");
 
-  function handleShare() {
-    if (navigator.share) {
-      navigator.share({
-        title: document.title,
-        url: window.location.href,
-      }).catch(() => {
-        // Fallback to clipboard if share dialog is cancelled or fails
-        copyToClipboard();
-      });
-    } else {
-      copyToClipboard();
+  async function copyToClipboard() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setStatus("copied");
+      window.setTimeout(() => setStatus("idle"), 2_000);
+    } catch {
+      setStatus("error");
     }
   }
 
-  function copyToClipboard() {
-    navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  async function handleShare() {
+    setStatus("idle");
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: document.title, url: window.location.href });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
+    }
+
+    await copyToClipboard();
   }
+
+  const label =
+    status === "copied"
+      ? "Link copiado!"
+      : status === "error"
+        ? "Não foi possível copiar"
+        : "Compartilhar";
 
   return (
     <button
+      type="button"
       onClick={handleShare}
-      className="flex items-center justify-center gap-2 w-full px-6 py-3 rounded-2xl text-sm font-medium transition-all"
+      className="flex w-full items-center justify-center gap-2 rounded-2xl px-6 py-3 text-sm font-medium transition-all"
       style={{
         background: "var(--bg-secondary)",
-        color: copied ? "var(--color-success, #10b981)" : "var(--text-secondary)",
+        color:
+          status === "copied"
+            ? "var(--color-success, #047857)"
+            : status === "error"
+              ? "#b91c1c"
+              : "var(--text-secondary)",
         border: "1px solid var(--border)",
       }}
+      aria-live="polite"
     >
-      {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-      {copied ? "Link copiado!" : "Compartilhar"}
+      {status === "copied" ? (
+        <Check className="h-4 w-4" aria-hidden="true" />
+      ) : status === "error" ? (
+        <AlertCircle className="h-4 w-4" aria-hidden="true" />
+      ) : (
+        <Share2 className="h-4 w-4" aria-hidden="true" />
+      )}
+      {label}
     </button>
   );
 }

@@ -1,167 +1,136 @@
+import type { Prisma } from "@prisma/client";
 import { type NextRequest } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { getCurrentAdmin } from "@/lib/auth";
+import { readJsonBody } from "@/lib/http-security";
+import { logServerError } from "@/lib/logging";
+import { prisma } from "@/lib/prisma";
+import {
+  parsePropertyQuery,
+  propertySchema,
+} from "@/lib/schemas/property";
 
-// GET /api/properties — List properties with filters
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
+const PROPERTY_BODY_LIMIT = 64 * 1024;
+
+// GET /api/properties — List properties with bounded, validated filters.
 export async function GET(request: NextRequest) {
+  const parsedQuery = parsePropertyQuery(request.nextUrl.searchParams);
+
+  if (!parsedQuery.success) {
+    return Response.json(
+      { error: parsedQuery.error.issues[0]?.message ?? "Filtros inválidos" },
+      { status: 400, headers: NO_STORE_HEADERS }
+    );
+  }
+
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "12");
-    const type = searchParams.get("type");
-    const purpose = searchParams.get("purpose");
-    const city = searchParams.get("city");
-    const search = searchParams.get("search");
-    const minPrice = searchParams.get("minPrice");
-    const maxPrice = searchParams.get("maxPrice");
-    const featured = searchParams.get("featured");
-    const active = searchParams.get("active");
+    const query = parsedQuery.data;
+    const where: Prisma.PropertyWhereInput = {};
 
-    const where: Record<string, unknown> = {};
-
-    // Only admins can see inactive properties
-    if (active === "all") {
+    if (query.active === "all") {
       const admin = await getCurrentAdmin();
-      if (!admin) {
-        // Non-admins always see only active properties
-        where.active = true;
-      }
-      // admins: no filter applied, sees all
+      if (!admin) where.active = true;
     } else {
       where.active = true;
     }
 
-    if (type && type !== "ALL") {
-      where.type = type;
-    }
-
-    if (purpose && purpose !== "ALL") {
-      where.purpose = purpose;
-    }
-
-    if (city) {
-      where.city = { contains: city };
-    }
-
-    if (search) {
+    if (query.type && query.type !== "ALL") where.type = query.type;
+    if (query.purpose && query.purpose !== "ALL") where.purpose = query.purpose;
+    if (query.city) where.city = { contains: query.city };
+    if (query.search) {
       where.OR = [
-        { title: { contains: search } },
-        { description: { contains: search } },
-        { city: { contains: search } },
-        { neighborhood: { contains: search } },
+        { title: { contains: query.search } },
+        { description: { contains: query.search } },
+        { city: { contains: query.search } },
+        { neighborhood: { contains: query.search } },
       ];
     }
-
-    if (minPrice) {
-      where.price = { ...(where.price as object || {}), gte: parseFloat(minPrice) };
+    if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+      where.price = {
+        ...(query.minPrice !== undefined ? { gte: query.minPrice } : {}),
+        ...(query.maxPrice !== undefined ? { lte: query.maxPrice } : {}),
+      };
+    }
+    if (query.featured !== undefined) {
+      where.featured = query.featured === "true";
     }
 
-    if (maxPrice) {
-      where.price = { ...(where.price as object || {}), lte: parseFloat(maxPrice) };
-    }
-
-    if (featured === "true") {
-      where.featured = true;
-    }
-
-    const [properties, total] = await Promise.all([
+    const [properties, total] = await prisma.$transaction([
       prisma.property.findMany({
         where,
-        include: { images: { orderBy: { order: "asc" } } },
+        include: {
+          images: { orderBy: { order: "asc" }, take: 1 },
+        },
         orderBy: [{ featured: "desc" }, { createdAt: "desc" }],
-        skip: (page - 1) * limit,
-        take: limit,
+        skip: (query.page - 1) * query.limit,
+        take: query.limit,
       }),
       prisma.property.count({ where }),
     ]);
 
-    return Response.json({
-      properties,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
+    return Response.json(
+      {
+        properties,
+        pagination: {
+          page: query.page,
+          limit: query.limit,
+          total,
+          totalPages: Math.ceil(total / query.limit),
+        },
       },
-    });
+      { headers: NO_STORE_HEADERS }
+    );
   } catch (error) {
-    console.error("Error fetching properties:", error);
+    logServerError("properties.list_failed", error);
     return Response.json(
       { error: "Erro ao buscar imóveis" },
-      { status: 500 }
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }
 
-// POST /api/properties — Create a new property (admin only)
+// POST /api/properties — Create a new property (admin only).
 export async function POST(request: NextRequest) {
   try {
     const admin = await getCurrentAdmin();
     if (!admin) {
-      return Response.json({ error: "Não autorizado" }, { status: 401 });
-    }
-
-    const data = await request.json();
-    const {
-      title,
-      description,
-      price,
-      city,
-      neighborhood,
-      address,
-      type,
-      purpose,
-      bedrooms,
-      bathrooms,
-      area,
-      whatsappPhone,
-      featured,
-      active,
-      images,
-    } = data;
-
-    if (!title || !description || !price || !city || !neighborhood || !type) {
       return Response.json(
-        { error: "Campos obrigatórios não preenchidos" },
-        { status: 400 }
+        { error: "Não autorizado" },
+        { status: 401, headers: NO_STORE_HEADERS }
       );
     }
 
+    const body = await readJsonBody(request, PROPERTY_BODY_LIMIT);
+    if (!body.success) return body.response;
+
+    const result = propertySchema.safeParse(body.data);
+    if (!result.success) {
+      return Response.json(
+        { error: result.error.issues[0]?.message ?? "Dados inválidos" },
+        { status: 400, headers: NO_STORE_HEADERS }
+      );
+    }
+
+    const { images, ...propertyData } = result.data;
     const property = await prisma.property.create({
       data: {
-        title,
-        description,
-        price: parseFloat(price),
-        city,
-        neighborhood,
-        address: address || null,
-        type,
-        purpose: purpose || "SALE",
-        bedrooms: bedrooms ? parseInt(bedrooms) : null,
-        bathrooms: bathrooms ? parseInt(bathrooms) : null,
-        area: area ? parseFloat(area) : null,
-        whatsappPhone: whatsappPhone || null,
-        featured: featured || false,
-        active: active !== false,
-        images: images?.length
-          ? {
-              create: images.map((img: { url: string; publicId?: string }, index: number) => ({
-                url: img.url,
-                publicId: img.publicId || "",
-                order: index,
-              })),
-            }
-          : undefined,
+        ...propertyData,
+        images: {
+          create: images.map((image, order) => ({ url: image.url, order })),
+        },
       },
-      include: { images: true },
+      include: { images: { orderBy: { order: "asc" } } },
     });
 
-    return Response.json(property, { status: 201 });
+    return Response.json(property, {
+      status: 201,
+      headers: NO_STORE_HEADERS,
+    });
   } catch (error) {
-    console.error("Error creating property:", error);
+    logServerError("properties.create_failed", error);
     return Response.json(
       { error: "Erro ao criar imóvel" },
-      { status: 500 }
+      { status: 500, headers: NO_STORE_HEADERS }
     );
   }
 }

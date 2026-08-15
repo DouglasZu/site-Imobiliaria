@@ -18,6 +18,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState("");
 
   // Don't show sidebar on login page
   if (pathname === "/admin/login") {
@@ -25,9 +27,19 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   }
 
   async function handleLogout() {
-    await fetch("/api/auth/logout", { method: "POST" });
-    router.push("/admin/login");
-    router.refresh();
+    if (loggingOut) return;
+    setLoggingOut(true);
+    setLogoutError("");
+
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("logout failed");
+      router.push("/admin/login");
+      router.refresh();
+    } catch {
+      setLogoutError("Não foi possível encerrar a sessão. Tente novamente.");
+      setLoggingOut(false);
+    }
   }
 
   const isEditing = pathname.includes("/edit");
@@ -41,7 +53,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     <div className="flex min-h-screen -mt-16 sm:-mt-20">
       {/* Mobile sidebar overlay */}
       {sidebarOpen && (
-        <div
+        <button
+          type="button"
+          aria-label="Fechar menu administrativo"
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
@@ -49,6 +63,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       {/* Sidebar */}
       <aside
+        id="admin-sidebar"
+        aria-label="Menu administrativo"
         className={`fixed lg:sticky top-0 left-0 z-50 lg:z-0 h-screen w-64 flex flex-col transition-transform duration-300 lg:translate-x-0 ${
           sidebarOpen ? "translate-x-0" : "-translate-x-full"
         }`}
@@ -65,6 +81,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </span>
           </div>
           <button
+            type="button"
+            aria-label="Fechar menu administrativo"
             onClick={() => setSidebarOpen(false)}
             className="lg:hidden p-1.5 rounded-lg transition-colors"
             style={{ color: "var(--text-muted)" }}
@@ -74,7 +92,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
 
         {/* Nav links */}
-        <nav className="flex-1 p-3 space-y-1">
+        <nav className="flex-1 p-3 space-y-1" aria-label="Navegação administrativa">
           {links.map((link) => {
             const isActive = link.exact
               ? pathname === link.href
@@ -107,11 +125,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             Ver Site
           </Link>
           <button
+            type="button"
             onClick={handleLogout}
+            disabled={loggingOut}
+            aria-busy={loggingOut}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all hover:bg-red-50 dark:hover:bg-red-950/20 text-red-600 dark:text-red-400"
           >
             <LogOut className="w-5 h-5" />
-            Sair
+            {loggingOut ? "Saindo..." : "Sair"}
           </button>
         </div>
       </aside>
@@ -124,6 +145,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)" }}
         >
           <button
+            type="button"
+            aria-label="Abrir menu administrativo"
+            aria-expanded={sidebarOpen}
+            aria-controls="admin-sidebar"
             onClick={() => setSidebarOpen(true)}
             className="p-2 rounded-lg transition-colors"
             style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
@@ -135,7 +160,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           </span>
         </div>
 
-        <div className="p-4 sm:p-6 lg:p-8">{children}</div>
+        <div className="p-4 sm:p-6 lg:p-8">
+          {logoutError && (
+            <p role="alert" className="mb-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+              {logoutError}
+            </p>
+          )}
+          {children}
+        </div>
       </div>
     </div>
   );

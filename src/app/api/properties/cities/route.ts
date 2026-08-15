@@ -1,19 +1,32 @@
 import { prisma } from "@/lib/prisma";
 
-// GET /api/properties/cities — Get unique cities
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
+
+// GET /api/properties/cities — Get unique cities from active properties.
 export async function GET() {
   try {
-    const properties = await prisma.property.findMany({
+    const properties = await prisma.property.groupBy({
+      by: ["city"],
       where: { active: true },
-      select: { city: true },
-      distinct: ["city"],
       orderBy: { city: "asc" },
     });
 
-    const cities = properties.map((p) => p.city);
+    return Response.json(
+      properties.map((property) => property.city),
+      { headers: NO_STORE_HEADERS }
+    );
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: "error",
+        event: "properties.cities_failed",
+        error: error instanceof Error ? error.name : "UnknownError",
+      })
+    );
 
-    return Response.json(cities);
-  } catch {
-    return Response.json({ error: "Erro ao buscar cidades" }, { status: 500 });
+    return Response.json(
+      { error: "Erro ao buscar cidades" },
+      { status: 500, headers: NO_STORE_HEADERS }
+    );
   }
 }

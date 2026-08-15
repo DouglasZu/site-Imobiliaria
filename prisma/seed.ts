@@ -2,17 +2,64 @@ import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import bcrypt from "bcryptjs";
-import path from "path";
-import { fileURLToPath } from "url";
+import { z } from "zod";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const dbPath = path.resolve(__dirname, "..", "dev.db");
-const adapter = new PrismaBetterSqlite3({
-  url: `file:${dbPath}`,
+const seedEnvSchema = z.object({
+  DATABASE_URL: z.string().min(1, "DATABASE_URL é obrigatória."),
+  ADMIN_EMAIL: z
+    .string()
+    .trim()
+    .email("ADMIN_EMAIL deve ser um email válido.")
+    .max(254, "ADMIN_EMAIL deve ter no máximo 254 caracteres.")
+    .transform((email) => email.toLowerCase()),
+  ADMIN_PASSWORD: z
+    .string()
+    .min(12, "ADMIN_PASSWORD deve ter pelo menos 12 caracteres.")
+    .max(72, "ADMIN_PASSWORD deve ter no máximo 72 caracteres.")
+    .regex(/[a-z]/, "ADMIN_PASSWORD deve conter uma letra minúscula.")
+    .regex(/[A-Z]/, "ADMIN_PASSWORD deve conter uma letra maiúscula.")
+    .regex(/[0-9]/, "ADMIN_PASSWORD deve conter um número.")
+    .regex(/[^A-Za-z0-9]/, "ADMIN_PASSWORD deve conter um caractere especial.")
+    .refine(
+      (password) => new TextEncoder().encode(password).byteLength <= 72,
+      "ADMIN_PASSWORD deve ter no máximo 72 bytes UTF-8."
+    ),
+  SEED_REPLACE_CONFIRM: z.literal("REPLACE_CATALOG_AND_ADMINS", {
+    errorMap: () => ({
+      message:
+        "Defina SEED_REPLACE_CONFIRM=REPLACE_CATALOG_AND_ADMINS somente para autorizar esta substituição destrutiva.",
+    }),
+  }),
+  ALLOW_PRODUCTION_SEED: z.enum(["true", "false"]).optional(),
 });
 
-const prisma = new PrismaClient({ adapter });
+const parsedEnv = seedEnvSchema.safeParse(process.env);
+
+if (!parsedEnv.success) {
+  console.error(
+    "❌ Configuração do seed inválida:",
+    parsedEnv.error.issues.map((issue) => ({
+      field: issue.path.join("."),
+      message: issue.message,
+    }))
+  );
+  throw new Error("Invalid seed environment");
+}
+
+if (
+  process.env.NODE_ENV === "production" &&
+  parsedEnv.data.ALLOW_PRODUCTION_SEED !== "true"
+) {
+  throw new Error(
+    "Seed em produção bloqueado. Defina ALLOW_PRODUCTION_SEED=true explicitamente para autorizar."
+  );
+}
+
+const seedEnv = parsedEnv.data;
+
+const prisma = new PrismaClient({
+  adapter: new PrismaBetterSqlite3({ url: seedEnv.DATABASE_URL }),
+});
 
 const sampleProperties = [
   {
@@ -26,14 +73,13 @@ Ideal para casais ou pequenas famílias que buscam praticidade e conforto.`,
     city: "São Paulo",
     neighborhood: "Vila Mariana",
     address: "Rua Domingos de Morais, 1200",
-    type: "APARTMENT",
-    purpose: "RENT",
+    type: "APARTMENT" as const,
+    purpose: "RENT" as const,
     bedrooms: 2,
     bathrooms: 2,
     area: 75,
     featured: true,
     active: true,
-    whatsappPhone: "5511999990001",
     images: [
       "https://images.unsplash.com/photo-1502672260266-1c1ef2d93688?w=1200&q=80",
       "https://images.unsplash.com/photo-1560448204-e02f11c3d0e2?w=1200&q=80",
@@ -51,13 +97,12 @@ Excelente localização com fácil acesso às principais vias da região.`,
     city: "São Paulo",
     neighborhood: "Alphaville",
     address: "Alameda das Palmeiras, 456",
-    type: "HOUSE",
+    type: "HOUSE" as const,
     bedrooms: 3,
     bathrooms: 3,
     area: 200,
     featured: true,
     active: true,
-    whatsappPhone: "5511999990002",
     images: [
       "https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=1200&q=80",
       "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1200&q=80",
@@ -75,13 +120,12 @@ Localização privilegiada, a 2 quadras da praia.`,
     city: "Santos",
     neighborhood: "Gonzaga",
     address: "Av. Ana Costa, 789",
-    type: "APARTMENT",
+    type: "APARTMENT" as const,
     bedrooms: 4,
     bathrooms: 4,
     area: 320,
     featured: true,
     active: true,
-    whatsappPhone: "5513999990003",
     images: [
       "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1200&q=80",
       "https://images.unsplash.com/photo-1600566753190-17f0baa2a6c3?w=1200&q=80",
@@ -99,7 +143,7 @@ Vizinhança residencial com casas de alto padrão.`,
     city: "Campinas",
     neighborhood: "Barão Geraldo",
     address: "Rua das Orquídeas, 100",
-    type: "LAND",
+    type: "LAND" as const,
     bedrooms: null,
     bathrooms: null,
     area: 450,
@@ -121,8 +165,8 @@ A 5 minutos a pé da estação de metrô.`,
     city: "São Paulo",
     neighborhood: "Consolação",
     address: "Rua Augusta, 2500",
-    type: "APARTMENT",
-    purpose: "RENT",
+    type: "APARTMENT" as const,
+    purpose: "RENT" as const,
     bedrooms: 1,
     bathrooms: 1,
     area: 35,
@@ -144,7 +188,7 @@ Garagem coberta para 2 carros. Rua tranquila, próximo a escolas e supermercados
     city: "Ribeirão Preto",
     neighborhood: "Jardim Sumaré",
     address: "Rua Maranhão, 350",
-    type: "HOUSE",
+    type: "HOUSE" as const,
     bedrooms: 3,
     bathrooms: 2,
     area: 180,
@@ -167,7 +211,7 @@ Ideal para escritórios, consultórios ou coworkings.`,
     city: "São Paulo",
     neighborhood: "Itaim Bibi",
     address: "Av. Brigadeiro Faria Lima, 3000",
-    type: "COMMERCIAL",
+    type: "COMMERCIAL" as const,
     bedrooms: null,
     bathrooms: 2,
     area: 90,
@@ -189,13 +233,12 @@ Perfeita para quem busca tranquilidade e contato com a natureza.`,
     city: "Ibiúna",
     neighborhood: "Zona Rural",
     address: "Estrada do Sítio, Km 5",
-    type: "FARM",
+    type: "FARM" as const,
     bedrooms: 4,
     bathrooms: 3,
     area: 5000,
     featured: true,
     active: true,
-    whatsappPhone: "5511999990004",
     images: [
       "https://images.unsplash.com/photo-1510798831971-661eb04b3739?w=1200&q=80",
       "https://images.unsplash.com/photo-1505843513577-22bb7d21e455?w=1200&q=80",
@@ -213,7 +256,7 @@ Localizado em bairro residencial tranquilo, próximo a parques e áreas de lazer
     city: "Curitiba",
     neighborhood: "Ecoville",
     address: "Rua Pedro Demeterco, 800",
-    type: "APARTMENT",
+    type: "APARTMENT" as const,
     bedrooms: 2,
     bathrooms: 1,
     area: 85,
@@ -235,13 +278,12 @@ Automação residencial completa com sistema de som e iluminação inteligente.`
     city: "São Paulo",
     neighborhood: "Moema",
     address: "Rua dos Maracatins, 500",
-    type: "HOUSE",
+    type: "HOUSE" as const,
     bedrooms: 4,
     bathrooms: 5,
     area: 350,
     featured: true,
     active: true,
-    whatsappPhone: "5511999990001",
     images: [
       "https://images.unsplash.com/photo-1600596542815-ffad4c1539a9?w=1200&q=80",
       "https://images.unsplash.com/photo-1600607687939-ce8a6c25118c?w=1200&q=80",
@@ -260,8 +302,8 @@ Localização central, próximo a restaurantes, bares e galerias de arte.`,
     city: "São Paulo",
     neighborhood: "República",
     address: "Rua Barão de Itapetininga, 150",
-    type: "APARTMENT",
-    purpose: "RENT",
+    type: "APARTMENT" as const,
+    purpose: "RENT" as const,
     bedrooms: 1,
     bathrooms: 1,
     area: 55,
@@ -283,7 +325,7 @@ Excelente visibilidade e acesso facilitado.`,
     city: "Campinas",
     neighborhood: "Cambuí",
     address: "Av. José de Souza Campos, 1000",
-    type: "LAND",
+    type: "LAND" as const,
     bedrooms: null,
     bathrooms: null,
     area: 600,
@@ -298,53 +340,58 @@ Excelente visibilidade e acesso facilitado.`,
 async function seed() {
   console.log("🌱 Seeding database...");
 
-  // Create admin using credentials from .env
-  const adminEmail = process.env.ADMIN_EMAIL || "admin@larimoveis.com";
-  const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
-  const passwordHash = await bcrypt.hash(adminPassword, 12);
-  await prisma.admin.upsert({
-    where: { email: adminEmail },
-    update: { passwordHash },
-    create: {
-      email: adminEmail,
-      passwordHash,
-    },
-  });
-  console.log(`✅ Admin created: ${adminEmail}`);
+  const passwordHash = await bcrypt.hash(seedEnv.ADMIN_PASSWORD, 12);
 
-  // Delete existing data
-  await prisma.image.deleteMany();
-  await prisma.property.deleteMany();
-  console.log("🗑️  Cleared existing properties");
+  await prisma.$transaction(async (tx) => {
+    // Rebuild seed-owned data atomically so a partial failure never destroys the catalog.
+    await tx.image.deleteMany();
+    await tx.property.deleteMany();
+    await tx.admin.deleteMany();
 
-  // Create properties
-  for (const prop of sampleProperties) {
-    const { images, ...propertyData } = prop;
-    await prisma.property.create({
+    // The seed intentionally leaves exactly one administrator.
+    await tx.admin.create({
       data: {
-        ...propertyData,
-        images: {
-          create: images.map((url, index) => ({
-            url,
-            publicId: "",
-            order: index,
-          })),
-        },
+        email: seedEnv.ADMIN_EMAIL,
+        passwordHash,
       },
     });
-  }
 
+    for (const prop of sampleProperties) {
+      const { images, ...propertyData } = prop;
+      await tx.property.create({
+        data: {
+          ...propertyData,
+          images: {
+            create: images.map((url, index) => ({
+              url,
+              publicId: "",
+              order: index,
+            })),
+          },
+        },
+      });
+    }
+  });
+
+  console.log("✅ Admin created from validated environment variables");
+  console.log("🗑️  Replaced existing seed data atomically");
   console.log(`✅ Created ${sampleProperties.length} sample properties`);
   console.log("\n🎉 Seed completed successfully!");
-  console.log("\n📋 Admin credentials:");
-  console.log(`   Email: ${adminEmail}`);
-  console.log("   Password: (defined in .env)");
 }
 
 seed()
-  .catch((e) => {
-    console.error("Seed error:", e);
-    process.exit(1);
+  .catch((error: unknown) => {
+    const errorName = error instanceof Error ? error.name : "UnknownError";
+    const errorCode =
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      typeof (error as { code?: unknown }).code === "string"
+        ? (error as { code: string }).code
+        : undefined;
+
+    console.error("Seed failed:", { errorName, errorCode });
+    process.exitCode = 1;
   })
   .finally(async () => {
     await prisma.$disconnect();

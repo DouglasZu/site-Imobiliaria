@@ -1,13 +1,15 @@
 /**
  * Format a number as Brazilian Real (BRL)
+ * Accepts number, string, or Prisma Decimal
  */
-export function formatPrice(price: number, purpose?: string): string {
+export function formatPrice(price: number | string, purpose?: string): string {
+  const numericPrice = Number(price);
   const formatted = new Intl.NumberFormat("pt-BR", {
     style: "currency",
     currency: "BRL",
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(price);
+  }).format(numericPrice);
   return purpose === "RENT" ? `${formatted}/mês` : formatted;
 }
 
@@ -50,11 +52,32 @@ export const propertyPurposes = ["SALE", "RENT"] as const;
 /**
  * Generate WhatsApp link with pre-filled message
  */
-export function getWhatsAppLink(propertyTitle: string, phone: string = "5511999999999"): string {
+export function getWhatsAppLink(propertyTitle: string, phone: string): string {
+  const normalizedPhone = phone.replace(/\D/g, "");
+  if (!/^\d{10,15}$/.test(normalizedPhone)) {
+    throw new Error("O telefone do WhatsApp deve incluir DDI e DDD.");
+  }
+
   const message = encodeURIComponent(
     `Olá! Tenho interesse no imóvel: ${propertyTitle}. Poderia me enviar mais informações?`
   );
-  return `https://wa.me/${phone}?text=${message}`;
+  return `https://wa.me/${normalizedPhone}?text=${message}`;
+}
+
+/**
+ * Format the configured WhatsApp phone for display without inventing contact data.
+ */
+export function formatWhatsAppPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+
+  if (digits.startsWith("55") && digits.length === 13) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 9)}-${digits.slice(9)}`;
+  }
+  if (digits.startsWith("55") && digits.length === 12) {
+    return `+55 (${digits.slice(2, 4)}) ${digits.slice(4, 8)}-${digits.slice(8)}`;
+  }
+
+  return `+${digits}`;
 }
 
 /**

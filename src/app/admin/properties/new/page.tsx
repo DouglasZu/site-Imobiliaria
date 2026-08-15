@@ -1,11 +1,14 @@
 import PropertyForm from "@/components/admin/PropertyForm";
+import { requireAdmin } from "@/lib/auth";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Novo Imóvel",
 };
 
-export default function NewPropertyPage() {
+export default async function NewPropertyPage() {
+  await requireAdmin();
+
   return (
     <div>
       <div className="mb-8">

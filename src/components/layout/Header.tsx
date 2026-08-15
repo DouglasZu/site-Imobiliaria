@@ -12,8 +12,15 @@ export default function Header() {
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem("theme");
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("theme");
+    } catch {
+      // System preference remains available when storage is blocked.
+    }
     if (saved === "dark" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
+      // Initialize browser-only persisted state after hydration.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setDark(true);
       document.documentElement.classList.add("dark");
     }
@@ -29,7 +36,11 @@ export default function Header() {
     const next = !dark;
     setDark(next);
     document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
+    try {
+      localStorage.setItem("theme", next ? "dark" : "light");
+    } catch {
+      // Theme still applies for the current page when storage is unavailable.
+    }
   }
 
   const links = [
@@ -66,13 +77,14 @@ export default function Header() {
           </Link>
 
           {/* Desktop Nav */}
-          <nav className="hidden md:flex items-center gap-1">
+          <nav className="hidden md:flex items-center gap-1" aria-label="Navegação principal">
             {links.map((link) => {
               const isActive = pathname === link.href || (link.href !== "/" && pathname.startsWith(link.href));
               return (
                 <Link
                   key={link.href}
                   href={link.href}
+                  aria-current={isActive ? "page" : undefined}
                   className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
                     isActive
                       ? "text-white"
@@ -90,10 +102,12 @@ export default function Header() {
               );
             })}
             <button
+              type="button"
               onClick={toggleTheme}
               className="ml-2 p-2.5 rounded-lg transition-all duration-200 hover:bg-gray-100 dark:hover:bg-gray-800"
               style={{ color: "var(--text-muted)" }}
-              aria-label="Alternar tema"
+              aria-label={dark ? "Usar tema claro" : "Usar tema escuro"}
+              aria-pressed={dark}
             >
               {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
@@ -102,18 +116,23 @@ export default function Header() {
           {/* Mobile menu button */}
           <div className="flex items-center gap-2 md:hidden">
             <button
+              type="button"
               onClick={toggleTheme}
               className="p-2 rounded-lg transition-all hover:bg-gray-100 dark:hover:bg-gray-800"
               style={{ color: "var(--text-muted)" }}
-              aria-label="Alternar tema"
+              aria-label={dark ? "Usar tema claro" : "Usar tema escuro"}
+              aria-pressed={dark}
             >
               {dark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
             </button>
             <button
+              type="button"
               onClick={() => setMobileOpen(!mobileOpen)}
               className="p-2 rounded-lg transition-all hover:bg-gray-100 dark:hover:bg-gray-800"
               style={{ color: "var(--text-secondary)" }}
-              aria-label="Menu"
+              aria-label={mobileOpen ? "Fechar menu" : "Abrir menu"}
+              aria-expanded={mobileOpen}
+              aria-controls="mobile-navigation"
             >
               {mobileOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
@@ -123,7 +142,7 @@ export default function Header() {
 
       {/* Mobile Nav */}
       {mobileOpen && (
-        <div className="md:hidden animate-slide-down" style={{ background: "var(--card-bg)", borderTop: "1px solid var(--border)" }}>
+        <nav id="mobile-navigation" className="md:hidden animate-slide-down" aria-label="Navegação móvel" style={{ background: "var(--card-bg)", borderTop: "1px solid var(--border)" }}>
           <div className="px-4 py-3 space-y-1">
             {links.map((link) => {
               const isActive = pathname === link.href || (link.href !== "/" && pathname.startsWith(link.href));
@@ -131,6 +150,7 @@ export default function Header() {
                 <Link
                   key={link.href}
                   href={link.href}
+                  aria-current={isActive ? "page" : undefined}
                   onClick={() => setMobileOpen(false)}
                   className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all ${
                     isActive ? "text-white" : ""
@@ -147,7 +167,7 @@ export default function Header() {
               );
             })}
           </div>
-        </div>
+        </nav>
       )}
     </header>
   );
