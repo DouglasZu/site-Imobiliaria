@@ -1,5 +1,4 @@
-import "dotenv/config";
-import { defineConfig, env } from "prisma/config";
+import { defineConfig } from "prisma/config";
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -7,8 +6,8 @@ export default defineConfig({
     path: "prisma/migrations-postgresql",
     seed: "npx tsx prisma/seed.ts",
   },
-  // Prisma 7 reads its CLI URL here. Use Neon's unpooled URL for migrations.
+  // Prisma 7 reads its CLI URL here. Use Neon's unpooled URL for migrations if available.
   datasource: {
-    url: env("DIRECT_URL"),
+    url: process.env.DIRECT_URL || process.env.DATABASE_URL || "",
   },
 });
