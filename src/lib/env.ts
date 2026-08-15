@@ -16,7 +16,7 @@ const postgresUrl = z
 
 const runtimeEnvSchema = z.object({
   DATABASE_URL: postgresUrl,
-  DATABASE_ADAPTER: z.enum(["neon", "pg"]).default("neon"),
+  DATABASE_ADAPTER: z.enum(["neon", "pg"]).default("pg"),
   JWT_SECRET: z
     .string()
     .min(32, "JWT_SECRET deve ter no mínimo 32 caracteres"),

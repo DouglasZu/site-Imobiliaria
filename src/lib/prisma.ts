@@ -17,15 +17,17 @@ function createPrismaClient() {
 
   return new PrismaClient({
     adapter,
-    // Query/error payloads may contain credentials or personal data. Routes
-    // emit their own structured, redacted events instead.
     log: env.NODE_ENV === "development" ? ["warn"] : [],
   });
 }
 
 function createNeonAdapter() {
-  neonConfig.webSocketConstructor = ws;
-  return new PrismaNeon({ connectionString: env.DATABASE_URL });
+  try {
+    neonConfig.webSocketConstructor = ws;
+    return new PrismaNeon({ connectionString: env.DATABASE_URL });
+  } catch {
+    return new PrismaPg({ connectionString: env.DATABASE_URL, max: 5 });
+  }
 }
 
 export const prisma = globalForPrisma.prisma ?? createPrismaClient();
