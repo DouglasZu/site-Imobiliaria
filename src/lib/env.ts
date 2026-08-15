@@ -22,7 +22,10 @@ const runtimeEnvSchema = z.object({
     .min(32, "JWT_SECRET deve ter no mínimo 32 caracteres"),
   WHATSAPP_PHONE: z
     .string()
-    .regex(/^\d{10,15}$/, "WHATSAPP_PHONE deve conter apenas DDI, DDD e número"),
+    .transform((val) => val.replace(/\D/g, ""))
+    .refine((val) => val.length >= 10 && val.length <= 15, {
+      message: "WHATSAPP_PHONE deve conter apenas DDI, DDD e número (10 a 15 dígitos)",
+    }),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),
