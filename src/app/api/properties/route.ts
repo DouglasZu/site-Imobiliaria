@@ -81,7 +81,8 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     logServerError("properties.list_failed", error);
-    return jsonNoStore({ error: "Erro ao buscar imóveis" }, { status: 500 });
+    const detail = error instanceof Error ? error.message : String(error);
+    return jsonNoStore({ error: "Erro ao buscar imóveis", detail }, { status: 500 });
   }
 }
 

@@ -76,12 +76,14 @@ export async function POST(request: NextRequest): Promise<Response> {
 
     return jsonNoStore({ success: true });
   } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
     logAuthEvent("error", "admin_login_failed", requestId, {
       error: error instanceof Error ? error.name : "UnknownError",
+      detail,
     });
 
     return jsonNoStore(
-      { error: "Erro interno do servidor" },
+      { error: "Erro interno do servidor", detail },
       { status: 500 }
     );
   }
