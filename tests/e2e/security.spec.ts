@@ -78,13 +78,16 @@ test.describe("security and production behavior", () => {
     };
 
     let propertyId: string | undefined;
+    let propertyVersion: number | undefined;
     try {
       const created = await page.request.post("/api/properties", {
         headers: { Origin: "http://localhost:3000" },
         data: fixture,
       });
       expect(created.status()).toBe(201);
-      propertyId = ((await created.json()) as { id: string }).id;
+      const createdProperty = (await created.json()) as { id: string; version: number };
+      propertyId = createdProperty.id;
+      propertyVersion = createdProperty.version;
 
       const adminList = await page.request.get(
         `/api/properties?active=all&search=${encodeURIComponent(title)}`
@@ -115,9 +118,12 @@ test.describe("security and production behavior", () => {
       await expect(page.getByText("3/12 imagens")).toBeVisible();
       await expect(page.getByAltText("Imagem 3")).toBeVisible();
     } finally {
-      if (propertyId) {
+      if (propertyId && propertyVersion) {
         const removed = await page.request.delete(`/api/properties/${propertyId}`, {
-          headers: { Origin: "http://localhost:3000" },
+          headers: {
+            Origin: "http://localhost:3000",
+            "If-Match": String(propertyVersion),
+          },
         });
         expect(removed.ok()).toBe(true);
       }

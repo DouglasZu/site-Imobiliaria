@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { formatPrice, propertyTypeLabels } from "@/lib/utils";
-import { isAllowedPropertyImageUrl } from "@/lib/image-policy";
+import { isRenderablePropertyImage } from "@/lib/image-policy";
+import { subscribeToAdminEvents } from "@/lib/realtime/client";
+import { ADMIN_EVENTS } from "@/lib/realtime/events";
 import {
   PlusCircle,
   Pencil,
@@ -20,6 +22,7 @@ import {
 
 interface Property {
   id: string;
+  version: number;
   title: string;
   price: number | string;
   city: string;
@@ -28,9 +31,35 @@ interface Property {
   purpose: string;
   active: boolean;
   featured: boolean;
-  images: { id: string; url: string }[];
+  images: { id: string; url: string; storageKey?: string | null }[];
   createdAt: string;
 }
+
+interface Lead {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  message: string;
+  propertyTitle: string;
+  status: "NEW" | "CONTACTED" | "ARCHIVED";
+  notificationStatus: "PENDING" | "SENT" | "FAILED" | "UNKNOWN" | "DISABLED";
+  createdAt: string;
+}
+
+interface LeadPagination {
+  page: number;
+  total: number;
+  totalPages: number;
+}
+
+const notificationStatusLabels: Record<Lead["notificationStatus"], string> = {
+  PENDING: "E-mail pendente",
+  SENT: "E-mail enviado",
+  FAILED: "Falha no e-mail",
+  UNKNOWN: "Envio incerto",
+  DISABLED: "E-mail desativado",
+};
 
 type PendingAction = "toggle" | "delete";
 
@@ -48,13 +77,22 @@ async function getResponseError(response: Response, fallback: string) {
 }
 
 function getMainImageUrl(property: Property) {
-  return property.images.find((image) => isAllowedPropertyImageUrl(image.url))?.url;
+  return property.images.find(isRenderablePropertyImage)?.url;
 }
 
 export default function AdminDashboard() {
   const [properties, setProperties] = useState<Property[]>([]);
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [realtimeNotice, setRealtimeNotice] = useState("");
+  const [leadError, setLeadError] = useState("");
+  const [leadPagination, setLeadPagination] = useState<LeadPagination>({
+    page: 1,
+    total: 0,
+    totalPages: 0,
+  });
+  const [loadingMoreLeads, setLoadingMoreLeads] = useState(false);
   const [pendingActions, setPendingActions] = useState<Record<string, PendingAction>>({});
   const pendingIds = useRef(new Set<string>());
 
@@ -67,8 +105,8 @@ export default function AdminDashboard() {
     });
   }
 
-  async function fetchProperties() {
-    setLoading(true);
+  const fetchProperties = useCallback(async (background = false) => {
+    if (!background) setLoading(true);
     setError("");
     try {
       const loadedProperties: Property[] = [];
@@ -108,17 +146,63 @@ export default function AdminDashboard() {
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Não foi possível carregar os imóveis.");
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    // The request is the external synchronization performed by this effect.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchProperties();
   }, []);
 
-  async function deleteProperty(id: string) {
+  const fetchLeads = useCallback(async (page = 1, append = false) => {
+    if (append) setLoadingMoreLeads(true);
+    try {
+      const response = await fetch(`/api/leads?limit=20&page=${page}`);
+      if (!response.ok) {
+        throw new Error(await getResponseError(response, "Não foi possível carregar os contatos."));
+      }
+      const payload = (await response.json()) as {
+        leads?: Lead[];
+        pagination?: LeadPagination;
+      };
+      if (
+        !Array.isArray(payload.leads) ||
+        !payload.pagination ||
+        !Number.isInteger(payload.pagination.page) ||
+        !Number.isInteger(payload.pagination.total) ||
+        !Number.isInteger(payload.pagination.totalPages)
+      ) {
+        throw new Error("A resposta de contatos é inválida.");
+      }
+      setLeads((previous) => {
+        if (!append) return payload.leads!;
+        const known = new Set(previous.map((lead) => lead.id));
+        return [...previous, ...payload.leads!.filter((lead) => !known.has(lead.id))];
+      });
+      setLeadPagination(payload.pagination);
+      setLeadError("");
+    } catch (caughtError) {
+      setLeadError(caughtError instanceof Error ? caughtError.message : "Não foi possível carregar os contatos.");
+    } finally {
+      if (append) setLoadingMoreLeads(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const initialLoad = window.setTimeout(() => {
+      void Promise.all([fetchProperties(), fetchLeads()]);
+    }, 0);
+    const unsubscribe = subscribeToAdminEvents((event) => {
+      if (event === ADMIN_EVENTS.leadCreated) {
+        setRealtimeNotice("Novo contato recebido. Consulte o e-mail e o banco de leads.");
+      }
+      // Pusher is only an invalidation signal; PostgreSQL remains the source of truth.
+      void Promise.all([fetchProperties(true), fetchLeads()]);
+    });
+
+    return () => {
+      window.clearTimeout(initialLoad);
+      unsubscribe();
+    };
+  }, [fetchLeads, fetchProperties]);
+
+  async function deleteProperty(id: string, version: number) {
     if (!confirm("Tem certeza que deseja excluir este imóvel?")) return;
     if (pendingIds.current.has(id)) return;
 
@@ -126,7 +210,10 @@ export default function AdminDashboard() {
     setPendingAction(id, "delete");
     setError("");
     try {
-      const response = await fetch(`/api/properties/${id}`, { method: "DELETE" });
+      const response = await fetch(`/api/properties/${id}`, {
+        method: "DELETE",
+        headers: { "If-Match": String(version) },
+      });
       if (!response.ok) {
         throw new Error(await getResponseError(response, "Não foi possível excluir o imóvel."));
       }
@@ -139,7 +226,7 @@ export default function AdminDashboard() {
     }
   }
 
-  async function toggleActive(id: string, currentActive: boolean) {
+  async function toggleActive(id: string, currentActive: boolean, version: number) {
     if (pendingIds.current.has(id)) return;
 
     const nextActive = !currentActive;
@@ -156,11 +243,20 @@ export default function AdminDashboard() {
       const response = await fetch(`/api/properties/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ active: nextActive }),
+        body: JSON.stringify({ active: nextActive, version }),
       });
       if (!response.ok) {
         throw new Error(await getResponseError(response, "Não foi possível atualizar o status."));
       }
+      const updated = (await response.json()) as { version?: number };
+      if (!Number.isInteger(updated.version)) {
+        throw new Error("A resposta de atualização é inválida.");
+      }
+      setProperties((previous) =>
+        previous.map((property) =>
+          property.id === id ? { ...property, version: updated.version! } : property
+        )
+      );
     } catch (caughtError) {
       setProperties((previous) =>
         previous.map((property) =>
@@ -187,6 +283,12 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-8">
+      {realtimeNotice && (
+        <div role="status" className="flex items-center justify-between gap-3 rounded-lg bg-blue-50 p-3 text-sm text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+          <span>{realtimeNotice}</span>
+          <button type="button" onClick={() => setRealtimeNotice("")} className="font-semibold">Fechar</button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
@@ -215,7 +317,7 @@ export default function AdminDashboard() {
           <span>{error}</span>
           <button
             type="button"
-            onClick={fetchProperties}
+            onClick={() => void fetchProperties()}
             className="self-start font-semibold underline underline-offset-4 sm:self-auto"
           >
             Tentar novamente
@@ -255,6 +357,56 @@ export default function AdminDashboard() {
           </div>
         ))}
       </div>
+
+      <section
+        className="rounded-xl p-5"
+        style={{ background: "var(--card-bg)", border: "1px solid var(--card-border)", boxShadow: "var(--shadow-card)" }}
+      >
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-bold" style={{ color: "var(--text)" }}>Contatos recentes</h2>
+          <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {leads.length} de {leadPagination.total} exibidos
+          </span>
+        </div>
+        {leadError ? (
+          <p role="alert" className="text-sm text-red-600 dark:text-red-400">{leadError}</p>
+        ) : leads.length === 0 ? (
+          <p className="text-sm" style={{ color: "var(--text-muted)" }}>Nenhum contato recebido.</p>
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {leads.map((lead) => (
+              <article key={lead.id} className="rounded-lg p-4" style={{ background: "var(--bg-secondary)", border: "1px solid var(--border)" }}>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-semibold" style={{ color: "var(--text)" }}>{lead.name}</h3>
+                    <p className="text-xs" style={{ color: "var(--text-muted)" }}>{lead.propertyTitle}</p>
+                  </div>
+                  <time className="shrink-0 text-xs" dateTime={lead.createdAt} style={{ color: "var(--text-muted)" }}>
+                    {new Date(lead.createdAt).toLocaleString("pt-BR")}
+                  </time>
+                </div>
+                <a href={`mailto:${lead.email}`} className="mt-2 block break-all text-xs font-medium text-blue-700 dark:text-blue-300">{lead.email}</a>
+                {lead.phone && <p className="mt-1 text-xs" style={{ color: "var(--text-secondary)" }}>{lead.phone}</p>}
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm" style={{ color: "var(--text-secondary)" }}>{lead.message}</p>
+                <p className="mt-3 text-xs font-medium" style={{ color: "var(--text-muted)" }}>
+                  {notificationStatusLabels[lead.notificationStatus] ?? "Status do e-mail indisponível"}
+                </p>
+              </article>
+            ))}
+            {leadPagination.page < leadPagination.totalPages && (
+              <button
+                type="button"
+                disabled={loadingMoreLeads}
+                onClick={() => void fetchLeads(leadPagination.page + 1, true)}
+                className="rounded-lg px-4 py-3 text-sm font-semibold disabled:opacity-60 lg:col-span-2"
+                style={{ border: "1px solid var(--border)", color: "var(--text-secondary)" }}
+              >
+                {loadingMoreLeads ? "Carregando..." : "Carregar contatos anteriores"}
+              </button>
+            )}
+          </div>
+        )}
+      </section>
 
       {/* Properties List */}
       <div
@@ -374,7 +526,7 @@ export default function AdminDashboard() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     type="button"
-                    onClick={() => toggleActive(property.id, property.active)}
+                    onClick={() => toggleActive(property.id, property.active, property.version)}
                     disabled={Boolean(pendingActions[property.id])}
                     className={`btn-action ${property.active ? "btn-action-warning" : "btn-action-success"}`}
                     aria-label={`${property.active ? "Desativar" : "Ativar"} ${property.title}`}
@@ -407,7 +559,7 @@ export default function AdminDashboard() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => deleteProperty(property.id)}
+                    onClick={() => deleteProperty(property.id, property.version)}
                     disabled={Boolean(pendingActions[property.id])}
                     className="btn-action btn-action-danger"
                     aria-label={`Excluir ${property.title}`}

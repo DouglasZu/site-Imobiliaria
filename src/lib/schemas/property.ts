@@ -11,6 +11,13 @@ export const PROPERTY_TYPES = [
 
 export const PROPERTY_PURPOSES = ["SALE", "RENT"] as const;
 
+export const propertyIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, "Identificador inválido");
+
 const nullableText = (max: number) =>
   z.preprocess(
     (value) => (value === "" || value === undefined ? null : value),
@@ -23,7 +30,7 @@ const nullableNumber = (schema: z.ZodNumber) =>
     z.coerce.number().pipe(schema).nullable()
   );
 
-export const propertyImageSchema = z
+const legacyImageInputSchema = z
   .object({
     url: z
       .string()
@@ -34,9 +41,22 @@ export const propertyImageSchema = z
         isAllowedPropertyImageUrl,
         "Use uma URL HTTPS válida do domínio images.unsplash.com"
       ),
-    order: z.coerce.number().int().min(0).max(11).optional(),
   })
   .strict("A imagem contém campos não permitidos");
+
+const existingImageInputSchema = z
+  .object({ imageId: propertyIdSchema })
+  .strict("A imagem contém campos não permitidos");
+
+const uploadedImageInputSchema = z
+  .object({ uploadId: propertyIdSchema })
+  .strict("A imagem contém campos não permitidos");
+
+export const propertyImageSchema = z.union([
+  legacyImageInputSchema,
+  existingImageInputSchema,
+  uploadedImageInputSchema,
+]);
 
 export const propertySchema = z
   .object({
@@ -92,6 +112,16 @@ export const propertySchema = z
   })
   .strict("O imóvel contém campos não permitidos");
 
+export const propertyVersionSchema = z.coerce.number().int().min(1).max(2_147_483_647);
+
+export const propertyCreateSchema = propertySchema.extend({
+  id: propertyIdSchema.optional(),
+});
+
+export const propertyUpdateSchema = propertySchema.extend({
+  version: propertyVersionSchema,
+});
+
 const optionalQueryText = (max: number) =>
   z.preprocess(
     (value) => (value === "" || value === null ? undefined : value),
@@ -131,15 +161,8 @@ export const propertyQuerySchema = z
     }
   });
 
-export const propertyIdSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(64)
-  .regex(/^[A-Za-z0-9_-]+$/, "Identificador inválido");
-
 export const propertyStatusSchema = z
-  .object({ active: z.boolean() })
+  .object({ active: z.boolean(), version: propertyVersionSchema })
   .strict("A atualização contém campos não permitidos");
 
 export function parsePropertyQuery(searchParams: URLSearchParams) {
@@ -154,4 +177,5 @@ export function parsePropertyQuery(searchParams: URLSearchParams) {
 }
 
 export type PropertyFormData = z.infer<typeof propertySchema>;
+export type PropertyImageInput = z.infer<typeof propertyImageSchema>;
 export type PropertyQuery = z.infer<typeof propertyQuerySchema>;

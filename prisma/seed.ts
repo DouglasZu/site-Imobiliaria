@@ -1,11 +1,20 @@
 import "dotenv/config";
+import { neonConfig } from "@neondatabase/serverless";
+import { PrismaNeon } from "@prisma/adapter-neon";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
-import { PrismaBetterSqlite3 } from "@prisma/adapter-better-sqlite3";
 import bcrypt from "bcryptjs";
+import ws from "ws";
 import { z } from "zod";
+
+const PRODUCTION_SEED_CONFIRMATION = "UPSERT_DEMO_FIXTURES";
 
 const seedEnvSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL é obrigatória."),
+  DIRECT_URL: z.string().min(1).optional(),
+  DATABASE_ADAPTER: z.enum(["neon", "pg"]).default("neon"),
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  SEED_PRODUCTION_CONFIRM: z.string().optional(),
   ADMIN_EMAIL: z
     .string()
     .trim()
@@ -24,13 +33,6 @@ const seedEnvSchema = z.object({
       (password) => new TextEncoder().encode(password).byteLength <= 72,
       "ADMIN_PASSWORD deve ter no máximo 72 bytes UTF-8."
     ),
-  SEED_REPLACE_CONFIRM: z.literal("REPLACE_CATALOG_AND_ADMINS", {
-    errorMap: () => ({
-      message:
-        "Defina SEED_REPLACE_CONFIRM=REPLACE_CATALOG_AND_ADMINS somente para autorizar esta substituição destrutiva.",
-    }),
-  }),
-  ALLOW_PRODUCTION_SEED: z.enum(["true", "false"]).optional(),
 });
 
 const parsedEnv = seedEnvSchema.safeParse(process.env);
@@ -46,19 +48,25 @@ if (!parsedEnv.success) {
   throw new Error("Invalid seed environment");
 }
 
+const seedEnv = parsedEnv.data;
+
 if (
-  process.env.NODE_ENV === "production" &&
-  parsedEnv.data.ALLOW_PRODUCTION_SEED !== "true"
+  seedEnv.NODE_ENV === "production" &&
+  seedEnv.SEED_PRODUCTION_CONFIRM !== PRODUCTION_SEED_CONFIRMATION
 ) {
   throw new Error(
-    "Seed em produção bloqueado. Defina ALLOW_PRODUCTION_SEED=true explicitamente para autorizar."
+    `Seed de demonstração bloqueado em produção. Defina SEED_PRODUCTION_CONFIRM=${PRODUCTION_SEED_CONFIRMATION} somente para uma execução deliberada.`
   );
 }
 
-const seedEnv = parsedEnv.data;
+const connectionString = seedEnv.DIRECT_URL ?? seedEnv.DATABASE_URL;
 
+neonConfig.webSocketConstructor = ws;
 const prisma = new PrismaClient({
-  adapter: new PrismaBetterSqlite3({ url: seedEnv.DATABASE_URL }),
+  adapter:
+    seedEnv.DATABASE_ADAPTER === "neon"
+      ? new PrismaNeon({ connectionString })
+      : new PrismaPg({ connectionString, max: 2 }),
 });
 
 const sampleProperties = [
@@ -98,6 +106,7 @@ Excelente localização com fácil acesso às principais vias da região.`,
     neighborhood: "Alphaville",
     address: "Alameda das Palmeiras, 456",
     type: "HOUSE" as const,
+    purpose: "SALE" as const,
     bedrooms: 3,
     bathrooms: 3,
     area: 200,
@@ -121,6 +130,7 @@ Localização privilegiada, a 2 quadras da praia.`,
     neighborhood: "Gonzaga",
     address: "Av. Ana Costa, 789",
     type: "APARTMENT" as const,
+    purpose: "SALE" as const,
     bedrooms: 4,
     bathrooms: 4,
     area: 320,
@@ -144,6 +154,7 @@ Vizinhança residencial com casas de alto padrão.`,
     neighborhood: "Barão Geraldo",
     address: "Rua das Orquídeas, 100",
     type: "LAND" as const,
+    purpose: "SALE" as const,
     bedrooms: null,
     bathrooms: null,
     area: 450,
@@ -189,6 +200,7 @@ Garagem coberta para 2 carros. Rua tranquila, próximo a escolas e supermercados
     neighborhood: "Jardim Sumaré",
     address: "Rua Maranhão, 350",
     type: "HOUSE" as const,
+    purpose: "SALE" as const,
     bedrooms: 3,
     bathrooms: 2,
     area: 180,
@@ -212,6 +224,7 @@ Ideal para escritórios, consultórios ou coworkings.`,
     neighborhood: "Itaim Bibi",
     address: "Av. Brigadeiro Faria Lima, 3000",
     type: "COMMERCIAL" as const,
+    purpose: "SALE" as const,
     bedrooms: null,
     bathrooms: 2,
     area: 90,
@@ -234,6 +247,7 @@ Perfeita para quem busca tranquilidade e contato com a natureza.`,
     neighborhood: "Zona Rural",
     address: "Estrada do Sítio, Km 5",
     type: "FARM" as const,
+    purpose: "SALE" as const,
     bedrooms: 4,
     bathrooms: 3,
     area: 5000,
@@ -257,6 +271,7 @@ Localizado em bairro residencial tranquilo, próximo a parques e áreas de lazer
     neighborhood: "Ecoville",
     address: "Rua Pedro Demeterco, 800",
     type: "APARTMENT" as const,
+    purpose: "SALE" as const,
     bedrooms: 2,
     bathrooms: 1,
     area: 85,
@@ -279,6 +294,7 @@ Automação residencial completa com sistema de som e iluminação inteligente.`
     neighborhood: "Moema",
     address: "Rua dos Maracatins, 500",
     type: "HOUSE" as const,
+    purpose: "SALE" as const,
     bedrooms: 4,
     bathrooms: 5,
     area: 350,
@@ -326,6 +342,7 @@ Excelente visibilidade e acesso facilitado.`,
     neighborhood: "Cambuí",
     address: "Av. José de Souza Campos, 1000",
     type: "LAND" as const,
+    purpose: "SALE" as const,
     bedrooms: null,
     bathrooms: null,
     area: 600,
@@ -342,40 +359,44 @@ async function seed() {
 
   const passwordHash = await bcrypt.hash(seedEnv.ADMIN_PASSWORD, 12);
 
-  await prisma.$transaction(async (tx) => {
-    // Rebuild seed-owned data atomically so a partial failure never destroys the catalog.
-    await tx.image.deleteMany();
-    await tx.property.deleteMany();
-    await tx.admin.deleteMany();
-
-    // The seed intentionally leaves exactly one administrator.
-    await tx.admin.create({
-      data: {
-        email: seedEnv.ADMIN_EMAIL,
-        passwordHash,
-      },
-    });
-
-    for (const prop of sampleProperties) {
-      const { images, ...propertyData } = prop;
-      await tx.property.create({
-        data: {
-          ...propertyData,
-          images: {
-            create: images.map((url, index) => ({
-              url,
-              publicId: "",
-              order: index,
-            })),
-          },
+  await prisma.$transaction(
+    async (tx) => {
+      // Provision only the requested administrator; other admins are untouched.
+      await tx.admin.upsert({
+        where: { email: seedEnv.ADMIN_EMAIL },
+        create: {
+          email: seedEnv.ADMIN_EMAIL,
+          passwordHash,
         },
+        update: { passwordHash },
       });
-    }
-  });
 
-  console.log("✅ Admin created from validated environment variables");
-  console.log("🗑️  Replaced existing seed data atomically");
-  console.log(`✅ Created ${sampleProperties.length} sample properties`);
+      for (const [index, prop] of sampleProperties.entries()) {
+        const { images, ...propertyData } = prop;
+        const id = `seed-property-${String(index + 1).padStart(2, "0")}`;
+
+        await tx.property.upsert({
+          where: { id },
+          create: {
+            id,
+            ...propertyData,
+          },
+          update: propertyData,
+        });
+
+        // Only images owned by this deterministic fixture are replaced.
+        await tx.image.deleteMany({ where: { propertyId: id } });
+        for (const [order, url] of images.entries()) {
+          await tx.image.create({ data: { propertyId: id, url, order } });
+        }
+      }
+    },
+    { maxWait: 10_000, timeout: 60_000 }
+  );
+
+  console.log("✅ Admin provisioned from validated environment variables");
+  console.log(`✅ Upserted ${sampleProperties.length} deterministic sample properties`);
+  console.log("✅ Existing non-seed catalog data and other admins were preserved");
   console.log("\n🎉 Seed completed successfully!");
 }
 

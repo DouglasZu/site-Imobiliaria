@@ -4,9 +4,11 @@ import { cache } from "react";
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/auth";
 import { PropertyWhereInput } from "@/types";
+import type { PropertyType } from "@prisma/client";
+import { canonicalizePropertyImages } from "@/lib/serialization";
 
 export async function findProperties(where: PropertyWhereInput, skip?: number, take?: number) {
-  return prisma.property.findMany({
+  const properties = await prisma.property.findMany({
     where: { ...where, active: true },
     include: {
       images: { orderBy: { order: "asc" }, take: 1 },
@@ -16,6 +18,7 @@ export async function findProperties(where: PropertyWhereInput, skip?: number, t
     skip,
     take,
   });
+  return properties.map(canonicalizePropertyImages);
 }
 
 export async function countProperties(where: PropertyWhereInput) {
@@ -23,25 +26,27 @@ export async function countProperties(where: PropertyWhereInput) {
 }
 
 export const findPropertyById = cache(async (id: string) => {
-  return prisma.property.findFirst({
+  const property = await prisma.property.findFirst({
     where: { id, active: true },
     include: { images: { orderBy: { order: "asc" } } },
   });
+  return property ? canonicalizePropertyImages(property) : null;
 });
 
 export async function findAdminPropertyById(id: string) {
   await requireAdmin();
 
-  return prisma.property.findUnique({
+  const property = await prisma.property.findUnique({
     where: { id },
     // The edit form submits a full replacement. It must receive every image,
     // otherwise saving an unrelated field would silently delete the rest.
     include: { images: { orderBy: { order: "asc" } } },
   });
+  return property ? canonicalizePropertyImages(property) : null;
 }
 
-export async function findRelatedProperties(property: { id: string; type: string; city: string }) {
-  return prisma.property.findMany({
+export async function findRelatedProperties(property: { id: string; type: PropertyType; city: string }) {
+  const properties = await prisma.property.findMany({
     where: {
       active: true,
       id: { not: property.id },
@@ -54,6 +59,7 @@ export async function findRelatedProperties(property: { id: string; type: string
     orderBy: { createdAt: "desc" },
     take: 3,
   });
+  return properties.map(canonicalizePropertyImages);
 }
 
 export async function getDistinctCities() {

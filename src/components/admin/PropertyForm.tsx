@@ -11,6 +11,7 @@ import {
   ArrowDown,
   ImageIcon,
   Phone,
+  Upload,
 } from "lucide-react";
 import { propertyTypeLabels, propertyTypes, propertyPurposeLabels, propertyPurposes } from "@/lib/utils";
 import { propertySchema } from "@/lib/schemas/property";
@@ -18,13 +19,17 @@ import {
   getPropertyImageUrlError,
   isAllowedPropertyImageUrl,
   PROPERTY_IMAGE_HOSTNAME,
+  PROPERTY_IMAGE_CONTENT_TYPES,
+  PROPERTY_IMAGE_MAX_BYTES,
   PROPERTY_IMAGE_MAX_COUNT,
   PROPERTY_IMAGE_MAX_URL_LENGTH,
 } from "@/lib/image-policy";
 
 interface PropertyFormProps {
+  propertyId: string;
   initialData?: {
     id: string;
+    version: number;
     title: string;
     description: string;
     price: number | string;
@@ -39,19 +44,36 @@ interface PropertyFormProps {
     whatsappPhone: string | null;
     featured: boolean;
     active: boolean;
-    images: { id: string; url: string }[];
+    images: { id: string; url: string; storageKey?: string | null }[];
   };
 }
 
 interface ImageItem {
   url: string;
+  imageId?: string;
+  uploadId?: string;
 }
 
-export default function PropertyForm({ initialData }: PropertyFormProps) {
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export default function PropertyForm({ propertyId, initialData }: PropertyFormProps) {
   const router = useRouter();
   const isEditing = !!initialData;
 
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
 
   const [title, setTitle] = useState(initialData?.title || "");
@@ -72,6 +94,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
   const [images, setImages] = useState<ImageItem[]>(
     initialData?.images?.map((img) => ({
       url: img.url,
+      imageId: img.id,
     })) || []
   );
 
@@ -79,6 +102,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
   const [imageError, setImageError] = useState("");
 
   function addImageByUrl() {
+    if (uploading || saving) return;
     const normalizedUrl = imageUrl.trim();
     const validationError = getPropertyImageUrlError(normalizedUrl);
 
@@ -100,17 +124,140 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
     setImageError("");
   }
 
-  function removeImage(index: number) {
+  async function removeImage(index: number) {
+    if (uploading || saving) return;
+    const image = images[index];
     setImages((prev) => prev.filter((_, i) => i !== index));
     setImageError("");
+
+    if (image?.uploadId) {
+      try {
+        const response = await fetchWithTimeout(
+          `/api/uploads/${image.uploadId}`,
+          { method: "DELETE" },
+          10_000
+        );
+        if (response.ok) return;
+      } catch {
+        // The durable upload intent is also swept by the maintenance cron.
+      }
+      if (image.uploadId) {
+        setImageError(
+          "A imagem saiu do formulário, mas a limpeza remota ficou pendente e será tentada novamente."
+        );
+      }
+    }
   }
 
   function moveImage(index: number, direction: "up" | "down") {
+    if (uploading || saving) return;
     const newImages = [...images];
     const newIndex = direction === "up" ? index - 1 : index + 1;
     if (newIndex < 0 || newIndex >= newImages.length) return;
     [newImages[index], newImages[newIndex]] = [newImages[newIndex], newImages[index]];
     setImages(newImages);
+  }
+
+  async function uploadFiles(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0 || uploading) return;
+    const available = PROPERTY_IMAGE_MAX_COUNT - images.length;
+    if (fileList.length > available) {
+      setImageError(`Adicione no máximo ${PROPERTY_IMAGE_MAX_COUNT} imagens.`);
+      return;
+    }
+    const files = Array.from(fileList);
+    if (files.length === 0) {
+      setImageError(`Adicione no máximo ${PROPERTY_IMAGE_MAX_COUNT} imagens.`);
+      return;
+    }
+
+    setUploading(true);
+    setImageError("");
+    try {
+      for (const file of files) {
+        if (!PROPERTY_IMAGE_CONTENT_TYPES.includes(file.type as (typeof PROPERTY_IMAGE_CONTENT_TYPES)[number])) {
+          throw new Error("Use somente imagens JPEG, PNG ou WebP.");
+        }
+        if (file.size < 1 || file.size > PROPERTY_IMAGE_MAX_BYTES) {
+          throw new Error("Cada imagem deve ter no máximo 10 MiB.");
+        }
+
+        const presign = await fetchWithTimeout(
+          "/api/uploads/presign",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              propertyId,
+              contentType: file.type,
+              size: file.size,
+            }),
+          },
+          15_000
+        );
+        const presignData = (await presign.json().catch(() => null)) as
+          | { uploadId?: string; uploadUrl?: string; headers?: Record<string, string>; error?: string }
+          | null;
+        if (!presign.ok || !presignData?.uploadId || !presignData.uploadUrl || !presignData.headers) {
+          throw new Error(presignData?.error || "Não foi possível iniciar o upload.");
+        }
+
+        const uploadId = presignData.uploadId;
+        const uploaded = await fetchWithTimeout(
+          presignData.uploadUrl,
+          {
+            method: "PUT",
+            headers: presignData.headers,
+            body: file,
+          },
+          90_000
+        );
+        if (!uploaded.ok) {
+          await fetchWithTimeout(
+            `/api/uploads/${uploadId}`,
+            { method: "DELETE" },
+            10_000
+          ).catch(() => undefined);
+          throw new Error("O envio direto para o armazenamento falhou.");
+        }
+
+        const confirm = await fetchWithTimeout(
+          "/api/uploads/confirm",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadId }),
+          },
+          30_000
+        );
+        const confirmData = (await confirm.json().catch(() => null)) as
+          | { image?: { uploadId?: string; url?: string }; error?: string }
+          | null;
+        if (!confirm.ok || !confirmData?.image?.uploadId || !confirmData.image.url) {
+          await fetchWithTimeout(
+            `/api/uploads/${uploadId}`,
+            { method: "DELETE" },
+            10_000
+          ).catch(() => undefined);
+          throw new Error(confirmData?.error || "Não foi possível validar a imagem enviada.");
+        }
+
+        setImages((previous) => [
+          ...previous,
+          { uploadId: confirmData.image!.uploadId!, url: confirmData.image!.url! },
+        ]);
+      }
+    } catch (caughtError) {
+      setImageError(
+        caughtError instanceof DOMException && caughtError.name === "AbortError"
+          ? "O upload excedeu o tempo limite. Tente novamente."
+          : caughtError instanceof Error
+            ? caughtError.message
+            : "Falha no upload."
+      );
+    } finally {
+      setUploading(false);
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -119,7 +266,9 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
     setSaving(true);
 
     try {
-      const invalidImage = images.find((image) => !isAllowedPropertyImageUrl(image.url));
+      const invalidImage = images.find(
+        (image) => !image.imageId && !image.uploadId && !isAllowedPropertyImageUrl(image.url)
+      );
       if (invalidImage) {
         setError(`Todas as imagens devem usar URLs HTTPS de ${PROPERTY_IMAGE_HOSTNAME}.`);
         return;
@@ -140,7 +289,13 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
         whatsappPhone: whatsappPhone || null,
         featured,
         active,
-        images: images.map((img, index) => ({ url: img.url, order: index })),
+        images: images.map((img) =>
+          img.imageId
+            ? { imageId: img.imageId }
+            : img.uploadId
+              ? { uploadId: img.uploadId }
+              : { url: img.url }
+        ),
       };
 
       const result = propertySchema.safeParse(body);
@@ -154,11 +309,17 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
         ? `/api/properties/${initialData.id}`
         : "/api/properties";
 
-      const res = await fetch(url, {
-        method: isEditing ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await fetchWithTimeout(
+        url,
+        {
+          method: isEditing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            isEditing ? { ...body, version: initialData.version } : { ...body, id: propertyId }
+          ),
+        },
+        30_000
+      );
 
       const data = await res.json();
 
@@ -183,7 +344,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8 max-w-3xl" aria-busy={saving}>
+    <form onSubmit={handleSubmit} className="space-y-8 max-w-3xl" aria-busy={saving || uploading}>
       {error && (
         <div role="alert" className="p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 text-sm">
           {error}
@@ -442,7 +603,37 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
           Imagens
         </h2>
 
-        {/* Add image URL */}
+        <div className="mb-5">
+          <label
+            htmlFor="imageFiles"
+            className="flex cursor-pointer items-center justify-center gap-2 rounded-xl px-4 py-4 text-sm font-semibold transition-colors"
+            style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)", border: "1px dashed var(--border)" }}
+          >
+            {uploading ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Upload className="h-4 w-4" aria-hidden="true" />
+            )}
+            {uploading ? "Enviando e validando imagem..." : "Enviar JPEG, PNG ou WebP para o R2"}
+          </label>
+          <input
+            id="imageFiles"
+            type="file"
+            accept={PROPERTY_IMAGE_CONTENT_TYPES.join(",")}
+            multiple
+            disabled={saving || uploading || images.length >= PROPERTY_IMAGE_MAX_COUNT}
+            className="sr-only"
+            onChange={(event) => {
+              void uploadFiles(event.currentTarget.files);
+              event.currentTarget.value = "";
+            }}
+          />
+          <p className="mt-2 text-xs" style={{ color: "var(--text-muted)" }}>
+            Até 10 MiB por arquivo. O servidor confirma tamanho, tipo e assinatura antes de aceitar.
+          </p>
+        </div>
+
+        {/* Legacy URL support keeps migrated/seed fixtures editable. */}
         <div className="mb-5">
           <div className="flex flex-col sm:flex-row gap-2">
             <label htmlFor="imageUrl" className="sr-only">
@@ -451,6 +642,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
             <input
               id="imageUrl"
               type="url"
+              disabled={saving || uploading}
               value={imageUrl}
               onChange={(e) => {
                 setImageUrl(e.target.value);
@@ -467,7 +659,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
             <button
               type="button"
               onClick={addImageByUrl}
-              disabled={images.length >= PROPERTY_IMAGE_MAX_COUNT}
+              disabled={saving || uploading || images.length >= PROPERTY_IMAGE_MAX_COUNT}
               className="flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-colors shrink-0"
               style={{ background: "var(--bg-secondary)", color: "var(--text-secondary)", border: "1px solid var(--border)" }}
             >
@@ -476,7 +668,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
             </button>
           </div>
           <div id="image-url-help" className="mt-2 flex flex-wrap justify-between gap-2 text-xs" style={{ color: "var(--text-muted)" }}>
-            <span>Somente URLs HTTPS de {PROPERTY_IMAGE_HOSTNAME}.</span>
+            <span>Alternativa legada: URL HTTPS de {PROPERTY_IMAGE_HOSTNAME}.</span>
             <span>{images.length}/{PROPERTY_IMAGE_MAX_COUNT} imagens</span>
           </div>
           {imageError && (
@@ -499,14 +691,14 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
               Nenhuma imagem adicionada
             </p>
             <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Cole uma URL permitida no campo acima
+              Envie um arquivo ou informe uma URL legada permitida
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
             {images.map((img, index) => (
               <div key={`${img.url}-${index}`} className="relative group rounded-xl overflow-hidden aspect-[4/3]" style={{ border: "1px solid var(--border)" }}>
-                {isAllowedPropertyImageUrl(img.url) ? (
+                {img.imageId || img.uploadId || isAllowedPropertyImageUrl(img.url) ? (
                   <Image
                     src={img.url}
                     alt={`Imagem ${index + 1}`}
@@ -528,7 +720,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
                   <button
                     type="button"
                     onClick={() => moveImage(index, "up")}
-                    disabled={index === 0}
+                    disabled={saving || uploading || index === 0}
                     className="p-1.5 rounded-lg bg-white/90 text-gray-700 disabled:opacity-30 hover:bg-white transition-colors"
                     title="Mover para cima"
                     aria-label={`Mover imagem ${index + 1} para cima`}
@@ -538,7 +730,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
                   <button
                     type="button"
                     onClick={() => moveImage(index, "down")}
-                    disabled={index === images.length - 1}
+                    disabled={saving || uploading || index === images.length - 1}
                     className="p-1.5 rounded-lg bg-white/90 text-gray-700 disabled:opacity-30 hover:bg-white transition-colors"
                     title="Mover para baixo"
                     aria-label={`Mover imagem ${index + 1} para baixo`}
@@ -548,6 +740,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
                   <button
                     type="button"
                     onClick={() => removeImage(index)}
+                    disabled={saving || uploading}
                     className="p-1.5 rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors"
                     title="Remover"
                     aria-label={`Remover imagem ${index + 1}`}
@@ -604,6 +797,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
         <button
           type="button"
           onClick={() => router.back()}
+          disabled={saving || uploading}
           className="px-6 py-3 rounded-lg text-sm font-medium transition-all"
           style={{ color: "var(--text-secondary)", border: "1px solid var(--border)" }}
         >
@@ -611,7 +805,7 @@ export default function PropertyForm({ initialData }: PropertyFormProps) {
         </button>
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || uploading}
           className="flex items-center gap-2 px-8 py-3 rounded-lg text-white font-semibold text-sm disabled:opacity-60 disabled:cursor-not-allowed transition-all hover:opacity-90"
           style={{ background: "#0F172A" }}
         >

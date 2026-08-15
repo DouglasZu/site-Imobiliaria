@@ -1,0 +1,46 @@
+name: Deploy production migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type deploy-production to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-database-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.ref == 'refs/heads/main' && inputs.confirmation == 'deploy-production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Generate Prisma Client and validate schema
+        env:
+          DIRECT_URL: ${{ secrets.NEON_DIRECT_URL }}
+        run: |
+          npx prisma generate
+          npx prisma validate
+      - name: Apply production migrations
+        env:
+          DIRECT_URL: ${{ secrets.NEON_DIRECT_URL }}
+        run: npm run db:deploy
+      - name: Confirm production migration status
+        env:
+          DIRECT_URL: ${{ secrets.NEON_DIRECT_URL }}
+        run: npx prisma migrate status

@@ -21,7 +21,7 @@ describe("rate-limit core", () => {
 
     expect(first.key).toBe(second.key);
     expect(first.key).not.toContain(rule.identifier);
-    expect(first.key).toMatch(/^login:account:[a-f0-9]{64}$/);
+    expect(first.key).toMatch(/^rate:account:[a-f0-9]{64}$/);
   });
 
   it("separa identificadores, escopos e janelas", () => {

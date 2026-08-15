@@ -63,7 +63,7 @@ export function prepareRateLimitRules(
 
     return {
       scope: rule.scope,
-      key: `login:${rule.scope}:${digest}`,
+      key: `rate:${rule.scope}:${digest}`,
       limit: rule.limit,
       expiresAt: new Date(windowStart + rule.windowMs),
     };

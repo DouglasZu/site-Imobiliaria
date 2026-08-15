@@ -28,7 +28,10 @@ export default async function EditPropertyPage({ params }: EditPropertyPageProps
           Atualize as informações do imóvel
         </p>
       </div>
-      <PropertyForm initialData={{ ...property, price: property.price.toString() }} />
+      <PropertyForm
+        propertyId={property.id}
+        initialData={{ ...property, price: property.price.toString() }}
+      />
     </div>
   );
 }

@@ -1,0 +1,46 @@
+name: Deploy preview migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type deploy-preview to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-database-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: inputs.confirmation == 'deploy-preview'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: preview
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Generate Prisma Client and validate schema
+        env:
+          DIRECT_URL: ${{ secrets.NEON_PREVIEW_DIRECT_URL }}
+        run: |
+          npx prisma generate
+          npx prisma validate
+      - name: Apply preview migrations
+        env:
+          DIRECT_URL: ${{ secrets.NEON_PREVIEW_DIRECT_URL }}
+        run: npm run db:deploy
+      - name: Confirm preview migration status
+        env:
+          DIRECT_URL: ${{ secrets.NEON_PREVIEW_DIRECT_URL }}
+        run: npx prisma migrate status

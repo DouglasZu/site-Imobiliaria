@@ -3,28 +3,57 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
+}
+
+enum PropertyType {
+  HOUSE
+  APARTMENT
+  LAND
+  COMMERCIAL
+  FARM
+}
+
+enum PropertyPurpose {
+  SALE
+  RENT
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  ARCHIVED
+}
+
+enum LeadNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  UNKNOWN
+  DISABLED
 }
 
 model Property {
   id            String          @id @default(cuid())
   title         String
   description   String
-  price         Float
+  price         Decimal         @db.Decimal(14, 2)
   city          String
   neighborhood  String
   address       String?
-  type          String
-  purpose       String          @default("SALE")
+  type          PropertyType
+  purpose       PropertyPurpose @default(SALE)
   bedrooms      Int?
   bathrooms     Int?
   area          Float?
   whatsappPhone String?
   featured      Boolean         @default(false)
   active        Boolean         @default(true)
+  version       Int             @default(1)
   images        Image[]
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  leads         Lead[]
+  createdAt     DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime        @updatedAt @db.Timestamptz(3)
 
   @@index([active, featured(sort: Desc), createdAt(sort: Desc)])
   @@index([city])
@@ -33,26 +62,84 @@ model Property {
 }
 
 model Image {
-  id         String   @id @default(cuid())
-  url        String
-  publicId   String   @default("")
-  order      Int      @default(0)
-  propertyId String
-  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  id          String   @id @default(cuid())
+  url         String
+  storageKey  String?  @unique
+  contentType String?
+  byteSize    Int?
+  order       Int      @default(0)
+  propertyId  String
+  property    Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
 
-  @@index([propertyId, order])
+  @@unique([propertyId, order])
 }
 
 model Admin {
-  id           String @id @default(cuid())
-  email        String @unique
-  passwordHash String
+  id             String          @id @default(cuid())
+  email          String          @unique
+  passwordHash   String
+  pendingUploads PendingUpload[]
+}
+
+model Lead {
+  id                      String                 @id @default(cuid())
+  requestId               String                 @unique
+  name                    String
+  email                   String
+  phone                   String?
+  message                 String
+  propertyId              String?
+  propertyTitle           String
+  property                Property?              @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  status                  LeadStatus             @default(NEW)
+  notificationStatus      LeadNotificationStatus @default(PENDING)
+  notificationId          String?
+  notificationAttemptedAt DateTime?              @db.Timestamptz(3)
+  notificationAttempts    Int                    @default(0)
+  createdAt               DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt               DateTime               @updatedAt @db.Timestamptz(3)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([propertyId, createdAt(sort: Desc)])
+}
+
+model PendingUpload {
+  id                   String    @id @default(cuid())
+  storageKey           String    @unique
+  propertyId           String
+  adminId              String
+  admin                Admin     @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  contentType          String
+  byteSize             Int
+  confirmedAt          DateTime? @db.Timestamptz(3)
+  signedExpiresAt      DateTime? @db.Timestamptz(3)
+  consumedAt           DateTime? @db.Timestamptz(3)
+  cancelledAt          DateTime? @db.Timestamptz(3)
+  cleanupAttempts      Int       @default(0)
+  cleanupLastAttemptAt DateTime? @db.Timestamptz(3)
+  expiresAt            DateTime  @db.Timestamptz(3)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([adminId, expiresAt])
+  @@index([propertyId, expiresAt])
+  @@index([consumedAt, cancelledAt, expiresAt])
+}
+
+model StorageCleanupTask {
+  storageKey    String    @id
+  attempts      Int       @default(0)
+  lastAttemptAt DateTime? @db.Timestamptz(3)
+  notBefore     DateTime  @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([notBefore, lastAttemptAt])
 }
 
 model RateLimitBucket {
   key       String   @id
   count     Int      @default(0)
-  expiresAt DateTime
+  expiresAt DateTime @db.Timestamptz(3)
 
   @@index([expiresAt])
 }

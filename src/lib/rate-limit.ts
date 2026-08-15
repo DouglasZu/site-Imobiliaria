@@ -21,6 +21,17 @@ const LOGIN_LIMITS = {
   global: { limit: 300, windowMs: 5 * MINUTE },
 } as const;
 
+const LEAD_LIMITS = {
+  ip: { limit: 5, windowMs: 15 * MINUTE },
+  email: { limit: 3, windowMs: 30 * MINUTE },
+  global: { limit: 100, windowMs: 5 * MINUTE },
+} as const;
+
+const UPLOAD_LIMITS = {
+  ip: { limit: 30, windowMs: 15 * MINUTE },
+  admin: { limit: 60, windowMs: 15 * MINUTE },
+} as const;
+
 function firstValidIp(value: string | null): string | null {
   if (!value) return null;
 
@@ -94,5 +105,34 @@ export async function consumeLoginRateLimit(input: {
       ...LOGIN_LIMITS.account,
     },
     { scope: "global", identifier: "all", ...LOGIN_LIMITS.global },
+  ]);
+}
+
+export async function consumeLeadRateLimit(input: {
+  ip: string;
+  email: string;
+}): Promise<RateLimitDecision> {
+  const ipDecision = await consumeRateLimits([
+    { scope: "lead-ip", identifier: input.ip, ...LEAD_LIMITS.ip },
+  ]);
+  if (!ipDecision.allowed) return ipDecision;
+
+  return consumeRateLimits([
+    { scope: "lead-email", identifier: input.email, ...LEAD_LIMITS.email },
+    { scope: "lead-global", identifier: "all", ...LEAD_LIMITS.global },
+  ]);
+}
+
+export async function consumeUploadRateLimit(input: {
+  ip: string;
+  adminId: string;
+}): Promise<RateLimitDecision> {
+  const ipDecision = await consumeRateLimits([
+    { scope: "upload-ip", identifier: input.ip, ...UPLOAD_LIMITS.ip },
+  ]);
+  if (!ipDecision.allowed) return ipDecision;
+
+  return consumeRateLimits([
+    { scope: "upload-admin", identifier: input.adminId, ...UPLOAD_LIMITS.admin },
   ]);
 }

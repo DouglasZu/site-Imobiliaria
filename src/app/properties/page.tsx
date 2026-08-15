@@ -50,10 +50,10 @@ async function PropertyList({ searchParams }: { searchParams: Record<string, str
   const rawType = getScalarParam(searchParams.type, 20);
   const rawPurpose = getScalarParam(searchParams.purpose, 20);
   const type = PROPERTY_TYPES.includes(rawType as (typeof PROPERTY_TYPES)[number])
-    ? rawType
+    ? (rawType as (typeof PROPERTY_TYPES)[number])
     : undefined;
   const purpose = PROPERTY_PURPOSES.includes(rawPurpose as (typeof PROPERTY_PURPOSES)[number])
-    ? rawPurpose
+    ? (rawPurpose as (typeof PROPERTY_PURPOSES)[number])
     : undefined;
   const city = getScalarParam(searchParams.city, 100);
   const search = getScalarParam(searchParams.search, 200);
@@ -70,18 +70,18 @@ async function PropertyList({ searchParams }: { searchParams: Record<string, str
     where.purpose = purpose;
   }
   if (city) {
-    where.city = { contains: city };
+    where.city = { contains: city, mode: "insensitive" };
   }
   if (search) {
     where.OR = [
-      { title: { contains: search } },
-      { description: { contains: search } },
-      { city: { contains: search } },
-      { neighborhood: { contains: search } },
+      { title: { contains: search, mode: "insensitive" } },
+      { description: { contains: search, mode: "insensitive" } },
+      { city: { contains: search, mode: "insensitive" } },
+      { neighborhood: { contains: search, mode: "insensitive" } },
     ];
   }
   if (minPrice !== undefined || maxPrice !== undefined) {
-    const priceFilter: Prisma.FloatFilter = {};
+    const priceFilter: Prisma.DecimalFilter = {};
     if (minPrice !== undefined) priceFilter.gte = minPrice;
     if (maxPrice !== undefined) priceFilter.lte = maxPrice;
     where.price = priceFilter;

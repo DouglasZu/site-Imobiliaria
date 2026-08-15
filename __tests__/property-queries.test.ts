@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/storage/r2", () => ({
+  getR2PublicUrl: (storageKey: string) => `https://images.example.test/${storageKey}`,
+}));
 vi.mock("@/lib/auth", () => ({ requireAdmin: mocks.requireAdmin }));
 vi.mock("@/lib/prisma", () => ({
   prisma: {

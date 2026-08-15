@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import PropertyForm from "@/components/admin/PropertyForm";
 import { requireAdmin } from "@/lib/auth";
 import type { Metadata } from "next";
@@ -8,6 +9,7 @@ export const metadata: Metadata = {
 
 export default async function NewPropertyPage() {
   await requireAdmin();
+  const draftPropertyId = randomUUID();
 
   return (
     <div>
@@ -19,7 +21,7 @@ export default async function NewPropertyPage() {
           Preencha as informações do imóvel
         </p>
       </div>
-      <PropertyForm />
+      <PropertyForm propertyId={draftPropertyId} />
     </div>
   );
 }

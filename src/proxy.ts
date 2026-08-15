@@ -5,6 +5,23 @@ import { AUTH_COOKIE_NAME, verifyToken } from "@/lib/auth";
 
 function createContentSecurityPolicy(nonce: string) {
   const isDevelopment = process.env.NODE_ENV === "development";
+  const r2AccountId = process.env.R2_ACCOUNT_ID;
+  const r2BucketName = process.env.R2_BUCKET_NAME;
+  const r2ApiOrigins =
+    r2AccountId && /^[a-f0-9]{32}$/i.test(r2AccountId)
+      ? [
+          `https://${r2AccountId}.r2.cloudflarestorage.com`,
+          ...(r2BucketName && /^[a-z0-9][a-z0-9.-]*[a-z0-9]$/.test(r2BucketName)
+            ? [`https://${r2BucketName}.${r2AccountId}.r2.cloudflarestorage.com`]
+            : []),
+        ]
+      : [];
+  const r2PublicOrigin = getSafeHttpsOrigin(process.env.R2_PUBLIC_URL);
+  const pusherCluster = process.env.NEXT_PUBLIC_PUSHER_CLUSTER;
+  const pusherWebSocket =
+    pusherCluster && /^[a-z0-9-]{2,20}$/.test(pusherCluster)
+      ? `wss://ws-${pusherCluster}.pusher.com`
+      : null;
 
   return [
     "default-src 'self'",
@@ -20,14 +37,26 @@ function createContentSecurityPolicy(nonce: string) {
     // nonce-restricted while styles are migrated incrementally to classes.
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
-    "img-src 'self' data: blob: https://images.unsplash.com https://a.tile.openstreetmap.org https://b.tile.openstreetmap.org https://c.tile.openstreetmap.org",
-    `connect-src 'self' https://nominatim.openstreetmap.org${
-      isDevelopment ? " ws:" : ""
+    `img-src 'self' data: blob: https://images.unsplash.com https://a.tile.openstreetmap.org https://b.tile.openstreetmap.org https://c.tile.openstreetmap.org${
+      r2PublicOrigin ? ` ${r2PublicOrigin}` : ""
     }`,
+    `connect-src 'self' https://nominatim.openstreetmap.org${
+      r2ApiOrigins.length ? ` ${r2ApiOrigins.join(" ")}` : ""
+    }${pusherWebSocket ? ` ${pusherWebSocket}` : ""}${isDevelopment ? " ws:" : ""}`,
     "worker-src 'self' blob:",
     "manifest-src 'self'",
     ...(isDevelopment ? [] : ["upgrade-insecure-requests"]),
   ].join("; ");
+}
+
+function getSafeHttpsOrigin(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password ? url.origin : null;
+  } catch {
+    return null;
+  }
 }
 
 export default async function proxy(request: NextRequest) {

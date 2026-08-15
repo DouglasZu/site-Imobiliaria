@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
-import { PROPERTY_IMAGE_REMOTE_PATTERNS } from "./src/lib/image-policy";
+import {
+  getR2ImageRemotePattern,
+  PROPERTY_IMAGE_REMOTE_PATTERNS,
+} from "./src/lib/image-policy";
 
 const isProduction = process.env.NODE_ENV === "production";
+const r2ImagePattern = getR2ImageRemotePattern(process.env.R2_PUBLIC_URL);
 
 const commonSecurityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -16,7 +20,10 @@ const commonSecurityHeaders = [
 
 const nextConfig: NextConfig = {
   images: {
-    remotePatterns: [...PROPERTY_IMAGE_REMOTE_PATTERNS],
+    remotePatterns: [
+      ...PROPERTY_IMAGE_REMOTE_PATTERNS,
+      ...(r2ImagePattern ? [r2ImagePattern] : []),
+    ],
     maximumRedirects: 0,
   },
   async headers() {

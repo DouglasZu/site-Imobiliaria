@@ -2,7 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { MapPin, Bed, Bath, Maximize, Building2 } from "lucide-react";
 import { formatPrice, propertyTypeLabels } from "@/lib/utils";
-import { isAllowedPropertyImageUrl } from "@/lib/image-policy";
+import { isRenderablePropertyImage } from "@/lib/image-policy";
 import FavoriteButton from "@/components/property/FavoriteButton";
 
 interface PropertyCardProps {
@@ -18,13 +18,13 @@ interface PropertyCardProps {
     bathrooms: number | null;
     area: number | null;
     featured: boolean;
-    images: { id: string; url: string }[];
+    images: { id: string; url: string; storageKey?: string | null }[];
     _count?: { images: number };
   };
 }
 
 export default function PropertyCard({ property }: PropertyCardProps) {
-  const mainImage = property.images.find((image) => isAllowedPropertyImageUrl(image.url))?.url;
+  const mainImage = property.images.find(isRenderablePropertyImage)?.url;
   const imageCount = property._count?.images ?? property.images.length;
 
   return (

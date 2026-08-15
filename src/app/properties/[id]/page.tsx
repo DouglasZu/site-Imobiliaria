@@ -3,10 +3,11 @@ import Link from "next/link";
 import { findPropertyById, findRelatedProperties } from "@/lib/queries/property";
 import { formatPrice, propertyTypeLabels, getWhatsAppLink } from "@/lib/utils";
 import { env } from "@/lib/env";
-import { isAllowedPropertyImageUrl } from "@/lib/image-policy";
+import { isRenderablePropertyImage } from "@/lib/image-policy";
 import ImageGallery from "@/components/property/ImageGallery";
 import PropertyCard from "@/components/property/PropertyCard";
 import PropertyMap from "@/components/property/PropertyMap";
+import InterestForm from "@/components/property/InterestForm";
 import {
   ArrowLeft,
   Bed,
@@ -35,7 +36,7 @@ export async function generateMetadata({ params }: PropertyPageProps): Promise<M
   }
 
   const description = `${property.title} em ${property.city} por ${formatPrice(property.price.toString(), property.purpose)}. ${property.description.slice(0, 120)}`;
-  const image = property.images.find((item) => isAllowedPropertyImageUrl(item.url));
+  const image = property.images.find(isRenderablePropertyImage);
 
   return {
     title: property.title,
@@ -65,9 +66,7 @@ export default async function PropertyPage({ params }: PropertyPageProps) {
     property.title,
     property.whatsappPhone || env.WHATSAPP_PHONE
   );
-  const allowedImages = property.images.filter((image) =>
-    isAllowedPropertyImageUrl(image.url)
-  );
+  const allowedImages = property.images.filter(isRenderablePropertyImage);
 
   const specs = [
     property.bedrooms && { icon: Bed, label: `${property.bedrooms} ${property.bedrooms === 1 ? "Quarto" : "Quartos"}` },
@@ -112,6 +111,8 @@ export default async function PropertyPage({ params }: PropertyPageProps) {
               {property.description}
             </div>
           </div>
+
+          <InterestForm propertyId={property.id} />
 
           {/* Map */}
           <div
